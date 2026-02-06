@@ -17,7 +17,7 @@ st.set_page_config(
 st.title("🏭 Manufacturing Live Monitoring Dashboard")
 
 # --------------------------------------------------
-# DATABASE CONFIG
+# DATABASE CONFIG (Railway + Streamlit Cloud)
 # --------------------------------------------------
 DB_CONFIG = {
     "host": st.secrets["DB_HOST"],
@@ -39,46 +39,61 @@ def get_connection():
 conn = get_connection()
 
 # --------------------------------------------------
-# SIDEBAR
+# SIDEBAR CONTROLS
 # --------------------------------------------------
 st.sidebar.title("🔧 Controls")
 
 MACHINES = ["M-1", "M-2", "M-3", "M-4", "M-5"]
 selected_machine = st.sidebar.selectbox("Select Machine", MACHINES)
 
-refresh_rate = st.sidebar.slider("Refresh rate (seconds)", 2, 10, 5)
+refresh_rate = st.sidebar.slider(
+    "Refresh rate (seconds)", 2, 10, 5
+)
+
 pause_generation = st.sidebar.checkbox("⏸ Pause data generation")
 
 # --------------------------------------------------
-# INITIAL STATE
+# INITIALIZE MACHINE STATE (CALM BASELINE)
 # --------------------------------------------------
 if "machine_state" not in st.session_state:
-    st.session_state.machine_state = {
-        m: {
+    st.session_state.machine_state = {}
+    for m in MACHINES:
+        st.session_state.machine_state[m] = {
             "temperature": np.random.uniform(62, 68),
             "vibration": np.random.uniform(2.5, 3.2),
             "units": np.random.randint(13, 16)
         }
-        for m in MACHINES
-    }
 
 # --------------------------------------------------
-# DATA GENERATION
+# DATA GENERATION (TONED DOWN)
 # --------------------------------------------------
 def insert_live_data():
     cursor = conn.cursor()
     now = datetime.now()
 
     for m in MACHINES:
-        s = st.session_state.machine_state[m]
+        state = st.session_state.machine_state[m]
 
-        temp = max(58, min(s["temperature"] + np.random.uniform(-0.4, 0.4), 82))
-        vib = max(2.0, min(s["vibration"] + np.random.uniform(-0.08, 0.08), 6.5))
-        units = max(10, min(s["units"] + np.random.randint(-1, 2), 18))
+        # Temperature – calm drift
+        temp_change = np.random.uniform(-0.4, 0.4)
+        if np.random.rand() < 0.05:
+            temp_change += np.random.uniform(0.6, 1.2)
+
+        temperature = max(58, min(state["temperature"] + temp_change, 82))
+
+        # Vibration – stable
+        vib_change = np.random.uniform(-0.08, 0.08)
+        if temperature > 75:
+            vib_change += np.random.uniform(0.05, 0.15)
+
+        vibration = max(2.0, min(state["vibration"] + vib_change, 6.5))
+
+        # Units – consistent output
+        units = max(10, min(state["units"] + np.random.randint(-1, 2), 18))
 
         st.session_state.machine_state[m] = {
-            "temperature": temp,
-            "vibration": vib,
+            "temperature": temperature,
+            "vibration": vibration,
             "units": units
         }
 
@@ -88,7 +103,7 @@ def insert_live_data():
             (timestamp, machine_id, temperature, vibration, units)
             VALUES (%s, %s, %s, %s, %s)
             """,
-            (now, m, round(temp, 2), round(vib, 2), units)
+            (now, m, round(temperature, 2), round(vibration, 2), units)
         )
 
     conn.commit()
@@ -102,64 +117,113 @@ if not pause_generation:
 
 df = pd.read_sql(
     """
-    SELECT timestamp, temperature, vibration, units
+    SELECT timestamp, machine_id, temperature, vibration, units
     FROM machine_telemetry
     WHERE machine_id = %s
-    ORDER BY timestamp
+    ORDER BY timestamp DESC
+    LIMIT 500
     """,
     conn,
     params=(selected_machine,)
 )
 
+if df.empty:
+    st.warning("Waiting for live data...")
+    time.sleep(refresh_rate)
+    st.rerun()
+
 df["timestamp"] = pd.to_datetime(df["timestamp"])
+df = df.sort_values("timestamp")
 latest = df.iloc[-1]
 
 # --------------------------------------------------
-# TEMP TREND ARROW
+# KPI & STATUS LOGIC
 # --------------------------------------------------
-if "prev_temp" not in st.session_state:
-    arrow = "➖"
-else:
-    arrow = "🔺" if latest["temperature"] > st.session_state.prev_temp else "🔻"
+TEMP_WARNING, TEMP_CRITICAL = 80, 85
+VIB_WARNING, VIB_CRITICAL = 6.5, 7.5
 
-st.session_state.prev_temp = latest["temperature"]
-
-# --------------------------------------------------
-# STATUS
-# --------------------------------------------------
-TEMP_CRITICAL, VIB_CRITICAL = 85, 7.5
 if latest["temperature"] >= TEMP_CRITICAL or latest["vibration"] >= VIB_CRITICAL:
-    status = "🔴 CRITICAL"
+    machine_status = "CRITICAL"
+elif latest["temperature"] >= TEMP_WARNING or latest["vibration"] >= VIB_WARNING:
+    machine_status = "WARNING"
 else:
-    status = "🟢 NORMAL"
+    machine_status = "NORMAL"
 
-# --------------------------------------------------
-# LIVE STATUS
-# --------------------------------------------------
-st.subheader("📊 Live Machine Status")
+if "critical_cycles" not in st.session_state:
+    st.session_state.critical_cycles = 0
 
-c1, c2, c3 = st.columns(3)
+if machine_status == "CRITICAL":
+    st.session_state.critical_cycles += 1
 
-c1.plotly_chart(
-    go.Figure(go.Indicator(
-        mode="gauge+number",
-        value=latest["temperature"],
-        title={"text": "Temperature (°C)"},
-        gauge={"axis": {"range": [0, 100]}}
-    )),
-    use_container_width=True
+estimated_downtime_minutes = round(
+    (st.session_state.critical_cycles * refresh_rate) / 60, 2
 )
 
-c2.metric("Status", status)
-c3.metric("Temperature", f"{arrow} {latest['temperature']:.1f} °C")
+estimated_units_per_hour = round(
+    (latest["units"] / refresh_rate) * 3600, 2
+)
+
+# --------------------------------------------------
+# PRIMARY LIVE KPIs
+# --------------------------------------------------
+st.subheader("📌 Primary Live KPIs")
+
+k1, k2, k3 = st.columns(3)
+
+k1.metric("Estimated Downtime (mins)", estimated_downtime_minutes)
+k2.metric(
+    "LIVE Vibration / Temperature",
+    f"{latest['vibration']:.2f} mm/s | {latest['temperature']:.1f} °C"
+)
+k3.metric("Estimated Units / Hour", estimated_units_per_hour)
 
 st.divider()
 
 # --------------------------------------------------
-# ✅ TEMPERATURE TREND (RESTORED)
+# TEMPERATURE GAUGE
 # --------------------------------------------------
-st.subheader("🌡️ LIVE Temperature Trend")
-st.line_chart(df.set_index("timestamp")[["temperature"]])
+def temperature_gauge(temp):
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=temp,
+        title={"text": "Temperature (°C)"},
+        gauge={
+            "axis": {"range": [0, 100]},
+            "steps": [
+                {"range": [0, 70], "color": "#4CAF50"},
+                {"range": [70, 85], "color": "#FFC107"},
+                {"range": [85, 100], "color": "#F44336"}
+            ],
+            "threshold": {"line": {"color": "black", "width": 4}, "value": 85}
+        }
+    ))
+    fig.update_layout(height=300)
+    return fig
+
+# --------------------------------------------------
+# LIVE MACHINE STATUS
+# --------------------------------------------------
+st.subheader("📊 Live Machine Status")
+
+c1, c2, c3 = st.columns([2, 1, 1])
+
+c1.plotly_chart(
+    temperature_gauge(latest["temperature"]),
+    use_container_width=True
+)
+
+# Status with colored dot
+if machine_status == "CRITICAL":
+    status_display = "🔴 CRITICAL"
+elif machine_status == "WARNING":
+    status_display = "🟡 WARNING"
+else:
+    status_display = "🟢 NORMAL"
+
+c2.metric("Machine", latest["machine_id"])
+c2.metric("Status", status_display)
+
+c3.metric("Vibration (mm/s)", f"{latest['vibration']:.2f}")
 
 st.divider()
 
@@ -169,12 +233,49 @@ st.divider()
 st.subheader("📈 LIVE Vibration Trend")
 st.line_chart(df.set_index("timestamp")[["vibration"]])
 
+st.divider()
+
 # --------------------------------------------------
-# FOOTER
+# DAILY PEAK TEMPERATURE
 # --------------------------------------------------
+today_df = df[df["timestamp"].dt.date == datetime.now().date()]
+
+if not today_df.empty:
+    peak = today_df.loc[today_df["temperature"].idxmax()]
+
+    st.subheader("🔥 Today’s Peak Temperature")
+
+    a, b, c = st.columns(3)
+    a.metric("Peak Temp (°C)", peak["temperature"])
+    b.metric("Units at Peak", int(peak["units"]))
+    c.metric("Vibration at Peak", peak["vibration"])
+
+    window_df = today_df[
+        (today_df["timestamp"] >= peak["timestamp"] - timedelta(minutes=10)) &
+        (today_df["timestamp"] <= peak["timestamp"] + timedelta(minutes=10))
+    ]
+
+    st.subheader("🕒 10-Minute Window Around Peak")
+    st.line_chart(window_df.set_index("timestamp")[["temperature", "vibration"]])
+
+# --------------------------------------------------
+# ALERT LEGEND / README NOTE (BOTTOM)
+# --------------------------------------------------
+st.divider()
 st.caption(
-    "🟢 NORMAL = Safe | 🔴 CRITICAL = Unsafe | 🔺/🔻 show temperature direction"
+    "📝 **Alert Status Indicators**  \n"
+    "• 🟢 **NORMAL** – Safe operating conditions within defined limits.  \n"
+    "• 🟡 **WARNING** – Elevated readings that require monitoring.  \n"
+    "• 🔴 **CRITICAL** – Unsafe conditions when **Temperature ≥ 85 °C** "
+    "or **Vibration ≥ 7.5 mm/s**.  \n"
+    "• **Estimated Downtime** represents sustained time spent in the critical state.  \n"
+    "• Alerts are **sensor-based and updated in real time**."
 )
 
+st.caption(f"Last updated: {datetime.now().strftime('%H:%M:%S')}")
+
+# --------------------------------------------------
+# AUTO REFRESH
+# --------------------------------------------------
 time.sleep(refresh_rate)
 st.rerun()
