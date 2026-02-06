@@ -17,7 +17,7 @@ st.set_page_config(
 st.title("🏭 Manufacturing Live Monitoring Dashboard")
 
 # --------------------------------------------------
-# DATABASE CONFIG (Railway + Streamlit Cloud SAFE)
+# DATABASE CONFIG (Railway + Streamlit Cloud)
 # --------------------------------------------------
 DB_CONFIG = {
     "host": st.secrets["DB_HOST"],
@@ -57,19 +57,19 @@ refresh_rate = st.sidebar.slider(
 pause_generation = st.sidebar.checkbox("⏸ Pause data generation")
 
 # --------------------------------------------------
-# INITIALIZE MACHINE STATE (REALISTIC BEHAVIOR)
+# INITIALIZE MACHINE STATE (CALM BASELINE)
 # --------------------------------------------------
 if "machine_state" not in st.session_state:
     st.session_state.machine_state = {}
     for m in MACHINES:
         st.session_state.machine_state[m] = {
-            "temperature": np.random.uniform(65, 72),
-            "vibration": np.random.uniform(2.5, 3.5),
-            "units": np.random.randint(12, 16)
+            "temperature": np.random.uniform(62, 68),
+            "vibration": np.random.uniform(2.5, 3.2),
+            "units": np.random.randint(13, 16)
         }
 
 # --------------------------------------------------
-# LIVE DATA GENERATION (RATIONAL)
+# TONED-DOWN LIVE DATA GENERATION
 # --------------------------------------------------
 def insert_live_data():
     cursor = conn.cursor()
@@ -78,20 +78,36 @@ def insert_live_data():
     for m in MACHINES:
         state = st.session_state.machine_state[m]
 
-        # Temperature drift
-        temp_change = np.random.uniform(-0.3, 0.6)
-        temperature = max(60, min(state["temperature"] + temp_change, 92))
+        # -----------------------------
+        # TEMPERATURE (CALM DRIFT)
+        # -----------------------------
+        temp_change = np.random.uniform(-0.4, 0.4)
 
-        # Vibration wear + heat stress
-        vib_change = np.random.uniform(-0.05, 0.12)
-        if temperature > 80:
-            vib_change += np.random.uniform(0.1, 0.25)
+        # rare mild stress (5%)
+        if np.random.rand() < 0.05:
+            temp_change += np.random.uniform(0.6, 1.2)
 
-        vibration = max(1.5, min(state["vibration"] + vib_change, 9))
+        temperature = state["temperature"] + temp_change
+        temperature = max(58, min(temperature, 82))
 
-        # Stable output
-        units = max(8, min(state["units"] + np.random.randint(-1, 2), 20))
+        # -----------------------------
+        # VIBRATION (STABLE)
+        # -----------------------------
+        vib_change = np.random.uniform(-0.08, 0.08)
 
+        if temperature > 75:
+            vib_change += np.random.uniform(0.05, 0.15)
+
+        vibration = state["vibration"] + vib_change
+        vibration = max(2.0, min(vibration, 6.5))
+
+        # -----------------------------
+        # UNITS (CONSISTENT)
+        # -----------------------------
+        units = state["units"] + np.random.randint(-1, 2)
+        units = max(10, min(units, 18))
+
+        # persist state
         st.session_state.machine_state[m] = {
             "temperature": temperature,
             "vibration": vibration,
@@ -141,7 +157,7 @@ df = df.sort_values("timestamp")
 latest = df.iloc[-1]
 
 # --------------------------------------------------
-# KPI DERIVED LOGIC (REQUIREMENT COMPLIANT)
+# KPI LOGIC (REQUIREMENT-COMPLIANT)
 # --------------------------------------------------
 TEMP_WARNING = 80
 TEMP_CRITICAL = 85
@@ -170,7 +186,7 @@ estimated_units_per_hour = round(
 )
 
 # --------------------------------------------------
-# PRIMARY LIVE KPIs (TOP SECTION)
+# PRIMARY LIVE KPIs
 # --------------------------------------------------
 st.subheader("📌 Primary Live KPIs")
 
@@ -212,7 +228,7 @@ def temperature_gauge(temp):
     return fig
 
 # --------------------------------------------------
-# LIVE STATUS
+# LIVE MACHINE STATUS
 # --------------------------------------------------
 st.subheader("📊 Live Machine Status")
 
@@ -246,6 +262,7 @@ today_df = df[df["timestamp"].dt.date == today]
 
 if not today_df.empty:
     peak = today_df.loc[today_df["temperature"].idxmax()]
+
     st.subheader("🔥 Today’s Peak Temperature")
 
     a, b, c = st.columns(3)
