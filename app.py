@@ -22,11 +22,10 @@ st.title("🏭 Manufacturing OEE – Live Monitoring Dashboard")
 st.sidebar.title("🔧 Controls")
 
 MACHINES = ["M-1", "M-2", "M-3", "M-4", "M-5"]
-machine_options = ["ALL"] + MACHINES
 
 selected_machine = st.sidebar.selectbox(
     "Select Machine",
-    machine_options
+    MACHINES
 )
 
 refresh_rate = st.sidebar.slider(
@@ -109,12 +108,9 @@ while True:
     df = st.session_state.data.copy()
 
     # --------------------------------------------------
-    # APPLY MACHINE FILTER
+    # APPLY MACHINE FILTER (NO ALL OPTION)
     # --------------------------------------------------
-    if selected_machine != "ALL":
-        filtered_df = df[df["machine_id"] == selected_machine]
-    else:
-        filtered_df = df.copy()
+    filtered_df = df[df["machine_id"] == selected_machine]
 
     # --------------------------------------------------
     # TODAY FILTER
