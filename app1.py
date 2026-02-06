@@ -54,8 +54,10 @@ refresh_rate = st.sidebar.slider(
     value=5
 )
 
+pause_generation = st.sidebar.checkbox("⏸ Pause data generation")
+
 # --------------------------------------------------
-# INITIALIZE MACHINE STATE (STATEFUL + REALISTIC)
+# INITIALIZE MACHINE STATE (REALISTIC BEHAVIOR)
 # --------------------------------------------------
 if "machine_state" not in st.session_state:
     st.session_state.machine_state = {}
@@ -67,7 +69,7 @@ if "machine_state" not in st.session_state:
         }
 
 # --------------------------------------------------
-# RATIONAL LIVE DATA GENERATION
+# LIVE DATA GENERATION (RATIONAL)
 # --------------------------------------------------
 def insert_live_data():
     cursor = conn.cursor()
@@ -76,44 +78,33 @@ def insert_live_data():
     for m in MACHINES:
         state = st.session_state.machine_state[m]
 
-        # ---- Temperature: slow thermal drift ----
+        # Temperature drift
         temp_change = np.random.uniform(-0.3, 0.6)
-        temperature = state["temperature"] + temp_change
-        temperature = max(60, min(temperature, 92))
+        temperature = max(60, min(state["temperature"] + temp_change, 92))
 
-        # ---- Vibration: wear + thermal stress ----
+        # Vibration wear + heat stress
         vib_change = np.random.uniform(-0.05, 0.12)
         if temperature > 80:
             vib_change += np.random.uniform(0.1, 0.25)
 
-        vibration = state["vibration"] + vib_change
-        vibration = max(1.5, min(vibration, 9))
+        vibration = max(1.5, min(state["vibration"] + vib_change, 9))
 
-        # ---- Units: stable output ----
-        units = state["units"] + np.random.randint(-1, 2)
-        units = max(8, min(units, 20))
+        # Stable output
+        units = max(8, min(state["units"] + np.random.randint(-1, 2), 20))
 
-        # ---- Persist state ----
         st.session_state.machine_state[m] = {
             "temperature": temperature,
             "vibration": vibration,
             "units": units
         }
 
-        # ---- Insert into DB ----
         cursor.execute(
             """
             INSERT INTO machine_telemetry
             (timestamp, machine_id, temperature, vibration, units)
             VALUES (%s, %s, %s, %s, %s)
             """,
-            (
-                now,
-                m,
-                round(temperature, 2),
-                round(vibration, 2),
-                units
-            )
+            (now, m, round(temperature, 2), round(vibration, 2), units)
         )
 
     conn.commit()
@@ -135,7 +126,9 @@ def fetch_data(machine_id):
 # --------------------------------------------------
 # MAIN EXECUTION
 # --------------------------------------------------
-insert_live_data()
+if not pause_generation:
+    insert_live_data()
+
 df = fetch_data(selected_machine)
 
 if df.empty:
@@ -148,6 +141,56 @@ df = df.sort_values("timestamp")
 latest = df.iloc[-1]
 
 # --------------------------------------------------
+# KPI DERIVED LOGIC (REQUIREMENT COMPLIANT)
+# --------------------------------------------------
+TEMP_WARNING = 80
+TEMP_CRITICAL = 85
+VIB_WARNING = 6.5
+VIB_CRITICAL = 7.5
+
+if latest["temperature"] >= TEMP_CRITICAL or latest["vibration"] >= VIB_CRITICAL:
+    machine_status = "CRITICAL"
+elif latest["temperature"] >= TEMP_WARNING or latest["vibration"] >= VIB_WARNING:
+    machine_status = "WARNING"
+else:
+    machine_status = "NORMAL"
+
+if "critical_cycles" not in st.session_state:
+    st.session_state.critical_cycles = 0
+
+if machine_status == "CRITICAL":
+    st.session_state.critical_cycles += 1
+
+estimated_downtime_minutes = round(
+    (st.session_state.critical_cycles * refresh_rate) / 60, 2
+)
+
+estimated_units_per_hour = round(
+    (latest["units"] / refresh_rate) * 3600, 2
+)
+
+# --------------------------------------------------
+# PRIMARY LIVE KPIs (TOP SECTION)
+# --------------------------------------------------
+st.subheader("📌 Primary Live KPIs")
+
+k1, k2, k3 = st.columns(3)
+
+with k1:
+    st.metric("Estimated Downtime (mins)", estimated_downtime_minutes)
+
+with k2:
+    st.metric(
+        "LIVE Vibration / Temperature",
+        f"{latest['vibration']:.2f} mm/s | {latest['temperature']:.1f} °C"
+    )
+
+with k3:
+    st.metric("Estimated Units / Hour", estimated_units_per_hour)
+
+st.divider()
+
+# --------------------------------------------------
 # TEMPERATURE GAUGE
 # --------------------------------------------------
 def temperature_gauge(temp):
@@ -157,19 +200,15 @@ def temperature_gauge(temp):
         title={"text": "Temperature (°C)"},
         gauge={
             "axis": {"range": [0, 100]},
-            "bar": {"color": "darkred"},
             "steps": [
                 {"range": [0, 70], "color": "#4CAF50"},
                 {"range": [70, 85], "color": "#FFC107"},
                 {"range": [85, 100], "color": "#F44336"}
             ],
-            "threshold": {
-                "line": {"color": "black", "width": 4},
-                "value": 85
-            }
+            "threshold": {"line": {"color": "black", "width": 4}, "value": 85}
         }
     ))
-    fig.update_layout(height=300, margin=dict(t=40, b=0))
+    fig.update_layout(height=300)
     return fig
 
 # --------------------------------------------------
@@ -177,75 +216,56 @@ def temperature_gauge(temp):
 # --------------------------------------------------
 st.subheader("📊 Live Machine Status")
 
-col1, col2, col3 = st.columns([2, 1, 1])
+c1, c2, c3 = st.columns([2, 1, 1])
 
-with col1:
-    st.plotly_chart(
-        temperature_gauge(latest["temperature"]),
-        use_container_width=True
-    )
+with c1:
+    st.plotly_chart(temperature_gauge(latest["temperature"]), use_container_width=True)
 
-with col2:
-    st.metric("Units Produced", int(latest["units"]))
+with c2:
     st.metric("Machine", latest["machine_id"])
+    st.metric("Status", machine_status)
 
-with col3:
+with c3:
     st.metric("Vibration (mm/s)", f"{latest['vibration']:.2f}")
-    if latest["vibration"] >= 7.5:
-        st.error("🚨 Critical vibration")
-    elif latest["vibration"] >= 6.5:
-        st.warning("⚠️ High vibration")
 
 st.divider()
 
 # --------------------------------------------------
 # VIBRATION TREND
 # --------------------------------------------------
-st.subheader("📈 Vibration Trend (mm/s)")
+st.subheader("📈 LIVE Vibration Trend")
 st.line_chart(df.set_index("timestamp")[["vibration"]])
 
 st.divider()
 
 # --------------------------------------------------
-# TODAY PEAK TEMPERATURE ANALYSIS
+# DAILY PEAK TEMPERATURE
 # --------------------------------------------------
 today = datetime.now().date()
 today_df = df[df["timestamp"].dt.date == today]
 
 if not today_df.empty:
-    peak_row = today_df.loc[today_df["temperature"].idxmax()]
+    peak = today_df.loc[today_df["temperature"].idxmax()]
+    st.subheader("🔥 Today’s Peak Temperature")
 
-    st.subheader("🔥 Today’s Peak Temperature Analysis")
+    a, b, c = st.columns(3)
+    a.metric("Peak Temp (°C)", peak["temperature"])
+    b.metric("Units at Peak", int(peak["units"]))
+    c.metric("Vibration at Peak", peak["vibration"])
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Machine", peak_row["machine_id"])
-    c2.metric("Max Temp (°C)", peak_row["temperature"])
-    c3.metric("Units", int(peak_row["units"]))
-    c4.metric("Vibration", peak_row["vibration"])
-
-    if peak_row["temperature"] >= 85:
-        st.error("🚨 Critical temperature event")
-    elif peak_row["temperature"] >= 80:
-        st.warning("⚠️ High temperature")
-    else:
-        st.success("✅ Temperature normal")
-
-    st.subheader("🕒 10-Minute Window Around Spike")
-
-    peak_time = peak_row["timestamp"]
+    peak_time = peak["timestamp"]
     window_df = today_df[
         (today_df["timestamp"] >= peak_time - timedelta(minutes=10)) &
         (today_df["timestamp"] <= peak_time + timedelta(minutes=10))
     ]
 
-    st.line_chart(
-        window_df.set_index("timestamp")[["temperature", "vibration"]]
-    )
+    st.subheader("🕒 10-Minute Window Around Peak")
+    st.line_chart(window_df.set_index("timestamp")[["temperature", "vibration"]])
 
 st.caption(f"Last updated: {datetime.now().strftime('%H:%M:%S')}")
 
 # --------------------------------------------------
-# AUTO REFRESH (SAFE)
+# AUTO REFRESH
 # --------------------------------------------------
 time.sleep(refresh_rate)
 st.rerun()
