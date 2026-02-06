@@ -65,7 +65,7 @@ if "machine_state" not in st.session_state:
         }
 
 # --------------------------------------------------
-# DATA GENERATION (TONED DOWN)
+# DATA GENERATION (TONED DOWN + 1% CRITICAL)
 # --------------------------------------------------
 def insert_live_data():
     cursor = conn.cursor()
@@ -79,14 +79,22 @@ def insert_live_data():
         if np.random.rand() < 0.05:
             temp_change += np.random.uniform(0.6, 1.2)
 
-        temperature = max(58, min(state["temperature"] + temp_change, 82))
+        # 1% chance of critical thermal stress
+        if np.random.rand() < 0.01:
+            temperature = max(58, min(state["temperature"] + temp_change, 90))
+        else:
+            temperature = max(58, min(state["temperature"] + temp_change, 82))
 
         # Vibration – stable
         vib_change = np.random.uniform(-0.08, 0.08)
         if temperature > 75:
             vib_change += np.random.uniform(0.05, 0.15)
 
-        vibration = max(2.0, min(state["vibration"] + vib_change, 6.5))
+        # 1% chance of critical vibration event
+        if np.random.rand() < 0.01:
+            vibration = max(2.0, min(state["vibration"] + vib_change, 8.0))
+        else:
+            vibration = max(2.0, min(state["vibration"] + vib_change, 6.5))
 
         # Units – consistent output
         units = max(10, min(state["units"] + np.random.randint(-1, 2), 18))
@@ -212,7 +220,6 @@ c1.plotly_chart(
     use_container_width=True
 )
 
-# Status with colored dot
 if machine_status == "CRITICAL":
     status_display = "🔴 CRITICAL"
 elif machine_status == "WARNING":
