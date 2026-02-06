@@ -204,4 +204,5 @@ st.caption(f"Last updated: {datetime.now().strftime('%H:%M:%S')}")
 # CONTROLLED REFRESH (FINAL LINE)
 # ==================================================
 time.sleep(refresh_rate)
-st.experimental_rerun()
+st.rerun()
+
