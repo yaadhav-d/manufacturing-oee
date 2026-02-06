@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import random
-import time
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
 import pytz
@@ -16,6 +15,11 @@ st.set_page_config(
 )
 
 st.title("🏭 Manufacturing OEE – Live Monitoring Dashboard")
+
+# ==================================================
+# TIMEZONE
+# ==================================================
+IST = pytz.timezone("Asia/Kolkata")
 
 # ==================================================
 # SIDEBAR CONTROLS
@@ -53,15 +57,25 @@ ANOMALY_PROBABILITY = 0.07
 # ==================================================
 if "data" not in st.session_state:
     st.session_state.data = pd.DataFrame(
-        columns=["timestamp", "machine_id", "temperature", "vibration", "units", "anomaly"]
+        columns=[
+            "timestamp_utc",
+            "machine_id",
+            "temperature",
+            "vibration",
+            "units",
+            "anomaly",
+        ]
     )
+
+if "last_generated" not in st.session_state:
+    st.session_state.last_generated = None
 
 # ==================================================
 # DATA GENERATOR
 # ==================================================
 def generate_live_data():
     rows = []
-    now = datetime.now(pytz.utc)
+    now_utc = datetime.now(pytz.utc)
 
     for m in MACHINES:
         base = BASELINES[m]
@@ -78,7 +92,7 @@ def generate_live_data():
             units = random.randint(5, 10)
 
         rows.append({
-            "timestamp": now,
+            "timestamp_utc": now_utc,
             "machine_id": m,
             "temperature": round(temp, 2),
             "vibration": round(vib, 2),
@@ -89,22 +103,28 @@ def generate_live_data():
     return pd.DataFrame(rows)
 
 # ==================================================
-# CONTROLLED DATA GENERATION (DO NOT TOUCH)
+# CONTROLLED DATA GENERATION (TIME-GUARDED)
 # ==================================================
-now = datetime.now(pytz.utc)
+now_utc = datetime.now(pytz.utc)
 
 if (
-    "last_generated" not in st.session_state
-    or (now - st.session_state.last_generated).seconds >= refresh_rate
+    st.session_state.last_generated is None
+    or (now_utc - st.session_state.last_generated).seconds >= refresh_rate
 ):
     new_data = generate_live_data()
     st.session_state.data = pd.concat(
         [st.session_state.data, new_data],
         ignore_index=True
     )
-    st.session_state.last_generated = now
+    st.session_state.last_generated = now_utc
 
 df = st.session_state.data.copy()
+
+# ==================================================
+# TIME CONVERSION (ONCE, CONSISTENTLY)
+# ==================================================
+df["timestamp_ist"] = df["timestamp_utc"].dt.tz_convert(IST)
+df["date_ist"] = df["timestamp_ist"].dt.date
 
 # ==================================================
 # APPLY MACHINE FILTER
@@ -113,10 +133,6 @@ if selected_machine != "ALL":
     filtered_df = df[df["machine_id"] == selected_machine]
 else:
     filtered_df = df.copy()
-
-filtered_df["date"] = filtered_df["timestamp"].dt.date
-today = datetime.now(pytz.utc).date()
-today_df = filtered_df[filtered_df["date"] == today]
 
 latest = filtered_df.iloc[-1]
 
@@ -145,7 +161,7 @@ def temperature_gauge(temp):
     return fig
 
 # ==================================================
-# UI
+# UI — LIVE STATUS
 # ==================================================
 st.subheader("📊 Live Machine Status")
 
@@ -170,22 +186,25 @@ with col3:
 
 st.divider()
 
+# ==================================================
+# VIBRATION TREND
+# ==================================================
 st.subheader("📈 Vibration Trend (mm/s)")
 st.line_chart(
-    filtered_df.set_index("timestamp")[["vibration"]]
+    filtered_df.set_index("timestamp_ist")[["vibration"]]
 )
 
 st.divider()
 
 # ==================================================
-# PEAK TEMPERATURE ANALYSIS (WITH INCIDENT TIME)
+# TODAY’S PEAK TEMPERATURE (IST-CORRECT)
 # ==================================================
+today_ist = datetime.now(IST).date()
+today_df = filtered_df[filtered_df["date_ist"] == today_ist]
+
 if not today_df.empty:
     peak = today_df.loc[today_df["temperature"].idxmax()]
-
-    ist = pytz.timezone("Asia/Kolkata")
-    incident_time_ist = peak["timestamp"].astimezone(ist)
-    incident_time_str = incident_time_ist.strftime("%I:%M:%S %p IST")
+    incident_time_str = peak["timestamp_ist"].strftime("%I:%M:%S %p IST")
 
     st.subheader("🔥 Today’s Peak Temperature (Root Cause View)")
 
@@ -199,19 +218,26 @@ if not today_df.empty:
     if peak["anomaly"] == 1:
         st.error("🚨 Confirmed anomaly – investigate load / bearing / cooling")
     else:
-        st.success("✅ Peak within normal range")
+        st.success("✅ Peak within normal operating range")
 
     window_df = today_df[
-        (today_df["timestamp"] >= peak["timestamp"] - timedelta(minutes=10)) &
-        (today_df["timestamp"] <= peak["timestamp"] + timedelta(minutes=10))
+        (today_df["timestamp_ist"] >= peak["timestamp_ist"] - timedelta(minutes=10)) &
+        (today_df["timestamp_ist"] <= peak["timestamp_ist"] + timedelta(minutes=10))
     ]
 
     st.subheader("🕒 Context Around Peak Event")
     st.line_chart(
-        window_df.set_index("timestamp")[["temperature", "vibration"]]
+        window_df.set_index("timestamp_ist")[["temperature", "vibration"]]
     )
 
-st.caption(f"Last updated: {incident_time_ist.strftime('%I:%M:%S %p IST')}")
+# ==================================================
+# FOOTER (TRUTHFUL)
+# ==================================================
+st.caption(
+    f"Last updated: {datetime.now(IST).strftime('%I:%M:%S %p IST')}"
+)
 
-time.sleep(refresh_rate)
+# ==================================================
+# RERUN (STREAMLIT-NATIVE)
+# ==================================================
 st.rerun()
