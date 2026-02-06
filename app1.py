@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import time
 from datetime import datetime, timedelta
 import mysql.connector
 import plotly.graph_objects as go
@@ -45,10 +46,7 @@ st.sidebar.title("🔧 Controls")
 
 MACHINES = ["M-1", "M-2", "M-3", "M-4", "M-5"]
 
-selected_machine = st.sidebar.selectbox(
-    "Select Machine",
-    MACHINES
-)
+selected_machine = st.sidebar.selectbox("Select Machine", MACHINES)
 
 refresh_rate = st.sidebar.slider(
     "Refresh rate (seconds)",
@@ -58,12 +56,7 @@ refresh_rate = st.sidebar.slider(
 )
 
 # --------------------------------------------------
-# AUTO REFRESH (NO WHILE LOOP)
-# --------------------------------------------------
-st.autorefresh(interval=refresh_rate * 1000, key="auto_refresh")
-
-# --------------------------------------------------
-# INSERT LIVE DATA (STREAMLIT-COMPATIBLE)
+# INSERT LIVE DATA (STREAMLIT SAFE)
 # --------------------------------------------------
 def insert_live_data():
     cursor = conn.cursor()
@@ -88,8 +81,6 @@ def insert_live_data():
     conn.commit()
     cursor.close()
 
-insert_live_data()
-
 # --------------------------------------------------
 # FETCH DATA
 # --------------------------------------------------
@@ -103,15 +94,19 @@ def fetch_data(machine_id):
     """
     return pd.read_sql(query, conn, params=(machine_id,))
 
+# --------------------------------------------------
+# MAIN EXECUTION
+# --------------------------------------------------
+insert_live_data()
 df = fetch_data(selected_machine)
 
 if df.empty:
     st.warning("Waiting for live data...")
-    st.stop()
+    time.sleep(refresh_rate)
+    st.rerun()
 
 df["timestamp"] = pd.to_datetime(df["timestamp"])
 df = df.sort_values("timestamp")
-
 latest = df.iloc[-1]
 
 # --------------------------------------------------
@@ -174,7 +169,7 @@ st.line_chart(df.set_index("timestamp")[["vibration"]])
 st.divider()
 
 # --------------------------------------------------
-# TODAY PEAK TEMPERATURE ANALYSIS
+# TODAY PEAK TEMPERATURE
 # --------------------------------------------------
 today = datetime.now().date()
 today_df = df[df["timestamp"].dt.date == today]
@@ -197,13 +192,9 @@ if not today_df.empty:
     else:
         st.success("✅ Temperature normal")
 
-    # --------------------------------------------------
-    # 10-MINUTE WINDOW AROUND PEAK
-    # --------------------------------------------------
-    st.subheader("🕒 10-Minute Window Around Temperature Spike")
+    st.subheader("🕒 10-Minute Window Around Spike")
 
     peak_time = peak_row["timestamp"]
-
     window_df = today_df[
         (today_df["timestamp"] >= peak_time - timedelta(minutes=10)) &
         (today_df["timestamp"] <= peak_time + timedelta(minutes=10))
@@ -214,3 +205,9 @@ if not today_df.empty:
     )
 
 st.caption(f"Last updated: {datetime.now().strftime('%H:%M:%S')}")
+
+# --------------------------------------------------
+# AUTO REFRESH (FINAL STEP)
+# --------------------------------------------------
+time.sleep(refresh_rate)
+st.rerun()
