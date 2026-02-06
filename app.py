@@ -5,6 +5,7 @@ import random
 import time
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
+import pytz
 
 # ==================================================
 # PAGE CONFIG
@@ -60,7 +61,7 @@ if "data" not in st.session_state:
 # ==================================================
 def generate_live_data():
     rows = []
-    now = datetime.now()
+    now = datetime.now(pytz.utc)
 
     for m in MACHINES:
         base = BASELINES[m]
@@ -88,9 +89,9 @@ def generate_live_data():
     return pd.DataFrame(rows)
 
 # ==================================================
-# ✅ FIXED: CONTROLLED DATA GENERATION (ONLY CHANGE)
+# CONTROLLED DATA GENERATION (DO NOT TOUCH)
 # ==================================================
-now = datetime.now()
+now = datetime.now(pytz.utc)
 
 if (
     "last_generated" not in st.session_state
@@ -114,7 +115,7 @@ else:
     filtered_df = df.copy()
 
 filtered_df["date"] = filtered_df["timestamp"].dt.date
-today = datetime.now().date()
+today = datetime.now(pytz.utc).date()
 today_df = filtered_df[filtered_df["date"] == today]
 
 latest = filtered_df.iloc[-1]
@@ -177,18 +178,23 @@ st.line_chart(
 st.divider()
 
 # ==================================================
-# PEAK TEMPERATURE ANALYSIS
+# PEAK TEMPERATURE ANALYSIS (WITH INCIDENT TIME)
 # ==================================================
 if not today_df.empty:
     peak = today_df.loc[today_df["temperature"].idxmax()]
 
+    ist = pytz.timezone("Asia/Kolkata")
+    incident_time_ist = peak["timestamp"].astimezone(ist)
+    incident_time_str = incident_time_ist.strftime("%I:%M:%S %p IST")
+
     st.subheader("🔥 Today’s Peak Temperature (Root Cause View)")
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Machine", peak["machine_id"])
     c2.metric("Max Temp (°C)", peak["temperature"])
     c3.metric("Units at that time", peak["units"])
     c4.metric("Vibration at that time", peak["vibration"])
+    c5.metric("Incident Time", incident_time_str)
 
     if peak["anomaly"] == 1:
         st.error("🚨 Confirmed anomaly – investigate load / bearing / cooling")
@@ -205,7 +211,7 @@ if not today_df.empty:
         window_df.set_index("timestamp")[["temperature", "vibration"]]
     )
 
-st.caption(f"Last updated: {datetime.now().strftime('%H:%M:%S')}")
+st.caption(f"Last updated: {incident_time_ist.strftime('%I:%M:%S %p IST')}")
 
 time.sleep(refresh_rate)
 st.rerun()
