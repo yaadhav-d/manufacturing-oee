@@ -3,10 +3,11 @@ import pandas as pd
 import numpy as np
 import time
 from datetime import datetime, timedelta
+import plotly.graph_objects as go
 
-# ---------------------------
+# --------------------------------------------------
 # PAGE CONFIG
-# ---------------------------
+# --------------------------------------------------
 st.set_page_config(
     page_title="Manufacturing OEE – Live Dashboard",
     layout="wide",
@@ -15,10 +16,10 @@ st.set_page_config(
 
 st.title("🏭 Manufacturing OEE – Live Monitoring Dashboard")
 
-# ---------------------------
-# SIDEBAR FILTERS
-# ---------------------------
-st.sidebar.title("🔧 Machine Filter")
+# --------------------------------------------------
+# SIDEBAR
+# --------------------------------------------------
+st.sidebar.title("🔧 Controls")
 
 MACHINES = ["M-1", "M-2", "M-3", "M-4", "M-5"]
 machine_options = ["ALL"] + MACHINES
@@ -35,17 +36,17 @@ refresh_rate = st.sidebar.slider(
     value=5
 )
 
-# ---------------------------
+# --------------------------------------------------
 # SESSION STATE INIT
-# ---------------------------
+# --------------------------------------------------
 if "data" not in st.session_state:
     st.session_state.data = pd.DataFrame(
         columns=["timestamp", "machine_id", "temperature", "vibration", "units"]
     )
 
-# ---------------------------
-# DATA GENERATOR (SIMULATION)
-# ---------------------------
+# --------------------------------------------------
+# DATA GENERATOR (SIMULATED LIVE DATA)
+# --------------------------------------------------
 def generate_live_data():
     rows = []
     now = datetime.now()
@@ -65,12 +66,40 @@ def generate_live_data():
 
     return pd.DataFrame(rows)
 
-# ---------------------------
+# --------------------------------------------------
+# TEMPERATURE GAUGE
+# --------------------------------------------------
+def temperature_gauge(temp):
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=temp,
+        title={"text": "Temperature (°C)"},
+        gauge={
+            "axis": {"range": [0, 100]},
+            "bar": {"color": "darkred"},
+            "steps": [
+                {"range": [0, 70], "color": "#4CAF50"},
+                {"range": [70, 85], "color": "#FFC107"},
+                {"range": [85, 100], "color": "#F44336"}
+            ],
+            "threshold": {
+                "line": {"color": "black", "width": 4},
+                "thickness": 0.75,
+                "value": 85
+            }
+        }
+    ))
+
+    fig.update_layout(height=300, margin=dict(t=40, b=0))
+    return fig
+
+# --------------------------------------------------
 # MAIN LOOP
-# ---------------------------
+# --------------------------------------------------
 placeholder = st.empty()
 
 while True:
+    # Generate and append new data
     new_data = generate_live_data()
     st.session_state.data = pd.concat(
         [st.session_state.data, new_data],
@@ -79,51 +108,63 @@ while True:
 
     df = st.session_state.data.copy()
 
-    # ---------------------------
+    # --------------------------------------------------
     # APPLY MACHINE FILTER
-    # ---------------------------
+    # --------------------------------------------------
     if selected_machine != "ALL":
         filtered_df = df[df["machine_id"] == selected_machine]
     else:
         filtered_df = df.copy()
 
-    # ---------------------------
+    # --------------------------------------------------
     # TODAY FILTER
-    # ---------------------------
+    # --------------------------------------------------
     filtered_df["date"] = filtered_df["timestamp"].dt.date
     today = datetime.now().date()
     today_df = filtered_df[filtered_df["date"] == today]
 
     with placeholder.container():
 
-        # ---------------------------
-        # LIVE KPIs
-        # ---------------------------
-        st.subheader("📊 Live KPIs")
+        # --------------------------------------------------
+        # LIVE STATUS
+        # --------------------------------------------------
+        st.subheader("📊 Live Machine Status")
 
         latest = filtered_df.iloc[-1]
 
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Temperature (°C)", f"{latest['temperature']}")
-        col2.metric("Vibration (mm/s)", f"{latest['vibration']}")
-        col3.metric("Units Produced", int(latest["units"]))
+        col1, col2, col3 = st.columns([2, 1, 1])
+
+        with col1:
+            st.plotly_chart(
+                temperature_gauge(latest["temperature"]),
+                use_container_width=True
+            )
+
+        with col2:
+            st.metric("Units Produced", int(latest["units"]))
+            st.metric("Machine", latest["machine_id"])
+
+        with col3:
+            st.metric("Vibration (mm/s)", f"{latest['vibration']:.2f}")
+            if latest["vibration"] > 7:
+                st.warning("⚠️ High vibration")
 
         st.divider()
 
-        # ---------------------------
-        # LIVE TRENDS
-        # ---------------------------
-        st.subheader("📈 Live Trends")
+        # --------------------------------------------------
+        # VIBRATION TREND
+        # --------------------------------------------------
+        st.subheader("📈 Vibration Trend (mm/s)")
 
         st.line_chart(
-            filtered_df.set_index("timestamp")[["temperature", "vibration"]]
+            filtered_df.set_index("timestamp")[["vibration"]]
         )
 
         st.divider()
 
-        # ---------------------------
+        # --------------------------------------------------
         # DAILY PEAK TEMPERATURE ANALYSIS
-        # ---------------------------
+        # --------------------------------------------------
         if not today_df.empty:
             peak_row = today_df.loc[today_df["temperature"].idxmax()]
 
@@ -133,7 +174,7 @@ while True:
             peak_vibration = peak_row["vibration"]
             peak_machine = peak_row["machine_id"]
 
-            st.subheader("🔥 Today's Peak Temperature Analysis")
+            st.subheader("🔥 Today’s Peak Temperature Analysis")
 
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Machine", peak_machine)
@@ -142,13 +183,13 @@ while True:
             c4.metric("Vibration at that time", f"{peak_vibration}")
 
             if peak_temp > 85:
-                st.error("🚨 High temperature event detected – investigate load or friction")
+                st.error("🚨 High temperature event – possible overload or friction issue")
             else:
-                st.success("✅ Temperature within safe operating range")
+                st.success("✅ Temperature within safe range")
 
-            # ---------------------------
-            # CONTEXT WINDOW (ROOT CAUSE VIEW)
-            # ---------------------------
+            # --------------------------------------------------
+            # ROOT CAUSE CONTEXT WINDOW
+            # --------------------------------------------------
             st.subheader("🕒 10-Minute Window Around Temperature Spike")
 
             window_df = today_df[
