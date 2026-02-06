@@ -2,9 +2,9 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import random
+import time
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
-from streamlit_autorefresh import st_autorefresh
 
 # ==================================================
 # PAGE CONFIG
@@ -17,11 +17,6 @@ st.set_page_config(
 st.title("🏭 Manufacturing OEE – Live Monitoring Dashboard")
 
 # ==================================================
-# AUTO REFRESH (KEY FIX)
-# ==================================================
-st_autorefresh(interval=5 * 1000, key="auto_refresh")
-
-# ==================================================
 # SIDEBAR CONTROLS
 # ==================================================
 st.sidebar.title("🔧 Controls")
@@ -32,6 +27,11 @@ machine_options = ["ALL"] + MACHINES
 selected_machine = st.sidebar.selectbox(
     "Select Machine",
     machine_options
+)
+
+refresh_rate = st.sidebar.slider(
+    "Refresh rate (seconds)",
+    2, 10, 5
 )
 
 # ==================================================
@@ -48,7 +48,7 @@ BASELINES = {
 ANOMALY_PROBABILITY = 0.07
 
 # ==================================================
-# SESSION STATE
+# SESSION STATE INIT
 # ==================================================
 if "data" not in st.session_state:
     st.session_state.data = pd.DataFrame(
@@ -56,7 +56,7 @@ if "data" not in st.session_state:
     )
 
 # ==================================================
-# DATA GENERATOR (ONE CYCLE PER RUN)
+# DATA GENERATOR (ONE CYCLE)
 # ==================================================
 def generate_live_data():
     rows = []
@@ -88,7 +88,7 @@ def generate_live_data():
     return pd.DataFrame(rows)
 
 # ==================================================
-# APPEND NEW DATA
+# APPEND NEW DATA (ON EACH RUN)
 # ==================================================
 new_data = generate_live_data()
 st.session_state.data = pd.concat(
@@ -137,7 +137,7 @@ def temperature_gauge(temp):
     return fig
 
 # ==================================================
-# UI RENDER
+# UI
 # ==================================================
 st.subheader("📊 Live Machine Status")
 
@@ -199,3 +199,9 @@ if not today_df.empty:
     )
 
 st.caption(f"Last updated: {datetime.now().strftime('%H:%M:%S')}")
+
+# ==================================================
+# CONTROLLED REFRESH (FINAL LINE)
+# ==================================================
+time.sleep(refresh_rate)
+st.experimental_rerun()
