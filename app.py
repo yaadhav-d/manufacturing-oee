@@ -50,7 +50,7 @@ BASELINES = {
     "M-5": {"temp": 69, "vib": 2.8},
 }
 
-ANOMALY_PROBABILITY = 0.03  # rarer, more realistic
+ANOMALY_PROBABILITY = 0.03  # rare & realistic
 
 # ==================================================
 # SESSION STATE INIT
@@ -71,7 +71,6 @@ if "last_generated" not in st.session_state:
     st.session_state.last_generated = None
 
 if "machine_state" not in st.session_state:
-    # holds slow-changing machine behaviour
     st.session_state.machine_state = {
         m: {
             "temp": BASELINES[m]["temp"],
@@ -91,18 +90,16 @@ def generate_live_data():
 
     for m in MACHINES:
         state = st.session_state.machine_state[m]
-        base = BASELINES[m]
 
         # small natural drift
         state["temp"] += np.random.normal(0, 0.2)
         state["vib"] += np.random.normal(0, 0.05)
 
-        # anomaly starts (gradual)
+        # start anomaly (gradual)
         if not state["anomaly_active"] and random.random() < ANOMALY_PROBABILITY:
             state["anomaly_active"] = True
             state["anomaly_steps"] = random.randint(3, 6)
 
-        # anomaly progression
         if state["anomaly_active"]:
             state["temp"] += np.random.uniform(1.0, 2.0)
             state["vib"] += np.random.uniform(0.3, 0.6)
@@ -114,7 +111,7 @@ def generate_live_data():
         else:
             anomaly = 0
 
-        # clamp values (real machines don’t explode)
+        # clamp to realistic limits
         state["temp"] = max(60, min(state["temp"], 95))
         state["vib"] = max(1.5, min(state["vib"], 8))
 
@@ -132,7 +129,7 @@ def generate_live_data():
     return pd.DataFrame(rows)
 
 # ==================================================
-# CONTROLLED DATA GENERATION
+# CONTROLLED DATA GENERATION (TIME-GUARDED)
 # ==================================================
 now_utc = datetime.now(pytz.utc)
 
@@ -156,7 +153,7 @@ df["timestamp_ist"] = df["timestamp_utc"].dt.tz_convert(IST)
 df["date_ist"] = df["timestamp_ist"].dt.date
 
 # ==================================================
-# APPLY MACHINE FILTER (FIXED)
+# APPLY MACHINE FILTER (WORKS)
 # ==================================================
 if selected_machine != "ALL":
     filtered_df = df[df["machine_id"] == selected_machine]
@@ -265,3 +262,13 @@ if not today_df.empty:
 st.caption(
     f"Last updated: {datetime.now(IST).strftime('%I:%M:%S %p IST')}"
 )
+
+# ==================================================
+# AUTO-REFRESH (SAFE, DOES NOT BREAK NAVBAR)
+# ==================================================
+now_utc = datetime.now(pytz.utc)
+
+if (now_utc - st.session_state.last_generated).seconds < refresh_rate:
+    st.stop()
+
+st.rerun()
