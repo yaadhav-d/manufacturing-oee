@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import time
 from datetime import datetime, timedelta
 import mysql.connector
 import plotly.graph_objects as go
@@ -17,25 +16,27 @@ st.set_page_config(
 st.title("🏭 Manufacturing Live Monitoring Dashboard")
 
 # --------------------------------------------------
-# DATABASE CONFIG (Railway)
-# USE STREAMLIT SECRETS IN PRODUCTION
+# DATABASE CONFIG (Railway + Streamlit Cloud SAFE)
 # --------------------------------------------------
 DB_CONFIG = {
     "host": st.secrets["DB_HOST"],
     "user": st.secrets["DB_USER"],
     "password": st.secrets["DB_PASSWORD"],
-    "database": "manufacturing_live_dashboard",
-    "port": 3306
+    "database": st.secrets["DB_NAME"],
+    "port": int(st.secrets["DB_PORT"]),
+    "ssl_disabled": False,
+    "connection_timeout": 10
 }
 
-# --------------------------------------------------
-# DB CONNECTION
-# --------------------------------------------------
-@st.cache_resource
 def get_connection():
-    return mysql.connector.connect(**DB_CONFIG)
+    try:
+        return mysql.connector.connect(**DB_CONFIG)
+    except mysql.connector.Error:
+        st.error("❌ Unable to connect to database")
+        st.stop()
 
 conn = get_connection()
+st.success("🟢 Database connected")
 
 # --------------------------------------------------
 # SIDEBAR
@@ -44,7 +45,10 @@ st.sidebar.title("🔧 Controls")
 
 MACHINES = ["M-1", "M-2", "M-3", "M-4", "M-5"]
 
-selected_machine = st.sidebar.selectbox("Select Machine", MACHINES)
+selected_machine = st.sidebar.selectbox(
+    "Select Machine",
+    MACHINES
+)
 
 refresh_rate = st.sidebar.slider(
     "Refresh rate (seconds)",
@@ -54,28 +58,37 @@ refresh_rate = st.sidebar.slider(
 )
 
 # --------------------------------------------------
-# LIVE DATA GENERATION + INSERT (STREAMLIT SAFE)
+# AUTO REFRESH (NO WHILE LOOP)
+# --------------------------------------------------
+st.autorefresh(interval=refresh_rate * 1000, key="auto_refresh")
+
+# --------------------------------------------------
+# INSERT LIVE DATA (STREAMLIT-COMPATIBLE)
 # --------------------------------------------------
 def insert_live_data():
     cursor = conn.cursor()
-
     now = datetime.now()
-    for m in MACHINES:
-        temp = round(np.random.uniform(60, 95), 2)
-        vib = round(np.random.uniform(2, 9), 2)
-        units = np.random.randint(5, 20)
 
+    for m in MACHINES:
         cursor.execute(
             """
             INSERT INTO machine_telemetry
             (timestamp, machine_id, temperature, vibration, units)
             VALUES (%s, %s, %s, %s, %s)
             """,
-            (now, m, temp, vib, units)
+            (
+                now,
+                m,
+                round(np.random.uniform(60, 95), 2),
+                round(np.random.uniform(2, 9), 2),
+                np.random.randint(5, 20)
+            )
         )
 
     conn.commit()
     cursor.close()
+
+insert_live_data()
 
 # --------------------------------------------------
 # FETCH DATA
@@ -89,6 +102,17 @@ def fetch_data(machine_id):
         LIMIT 500
     """
     return pd.read_sql(query, conn, params=(machine_id,))
+
+df = fetch_data(selected_machine)
+
+if df.empty:
+    st.warning("Waiting for live data...")
+    st.stop()
+
+df["timestamp"] = pd.to_datetime(df["timestamp"])
+df = df.sort_values("timestamp")
+
+latest = df.iloc[-1]
 
 # --------------------------------------------------
 # TEMPERATURE GAUGE
@@ -108,37 +132,12 @@ def temperature_gauge(temp):
             ],
             "threshold": {
                 "line": {"color": "black", "width": 4},
-                "thickness": 0.75,
                 "value": 85
             }
         }
     ))
     fig.update_layout(height=300, margin=dict(t=40, b=0))
     return fig
-
-# --------------------------------------------------
-# AUTO REFRESH
-# --------------------------------------------------
-st.autorefresh(interval=refresh_rate * 1000, key="refresh")
-
-# --------------------------------------------------
-# WRITE LIVE DATA
-# --------------------------------------------------
-insert_live_data()
-
-# --------------------------------------------------
-# READ DATA
-# --------------------------------------------------
-df = fetch_data(selected_machine)
-
-if df.empty:
-    st.warning("No data available yet")
-    st.stop()
-
-df["timestamp"] = pd.to_datetime(df["timestamp"])
-df = df.sort_values("timestamp")
-
-latest = df.iloc[-1]
 
 # --------------------------------------------------
 # LIVE STATUS
@@ -159,7 +158,9 @@ with col2:
 
 with col3:
     st.metric("Vibration (mm/s)", f"{latest['vibration']:.2f}")
-    if latest["vibration"] > 7:
+    if latest["vibration"] >= 7.5:
+        st.error("🚨 Critical vibration")
+    elif latest["vibration"] >= 6.5:
         st.warning("⚠️ High vibration")
 
 st.divider()
@@ -173,7 +174,7 @@ st.line_chart(df.set_index("timestamp")[["vibration"]])
 st.divider()
 
 # --------------------------------------------------
-# TODAY PEAK TEMPERATURE
+# TODAY PEAK TEMPERATURE ANALYSIS
 # --------------------------------------------------
 today = datetime.now().date()
 today_df = df[df["timestamp"].dt.date == today]
@@ -191,13 +192,15 @@ if not today_df.empty:
 
     if peak_row["temperature"] >= 85:
         st.error("🚨 Critical temperature event")
+    elif peak_row["temperature"] >= 80:
+        st.warning("⚠️ High temperature")
     else:
-        st.success("✅ Temperature within limits")
+        st.success("✅ Temperature normal")
 
     # --------------------------------------------------
-    # 10-MINUTE WINDOW
+    # 10-MINUTE WINDOW AROUND PEAK
     # --------------------------------------------------
-    st.subheader("🕒 10-Minute Window Around Peak")
+    st.subheader("🕒 10-Minute Window Around Temperature Spike")
 
     peak_time = peak_row["timestamp"]
 
