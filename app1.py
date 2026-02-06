@@ -33,14 +33,13 @@ def get_connection():
     try:
         return mysql.connector.connect(**DB_CONFIG)
     except mysql.connector.Error:
-        st.error("❌ Unable to connect to database")
+        st.error("❌ Database connection failed")
         st.stop()
 
 conn = get_connection()
-st.success("🟢 Database connected")
 
 # --------------------------------------------------
-# SIDEBAR
+# SIDEBAR CONTROLS
 # --------------------------------------------------
 st.sidebar.title("🔧 Controls")
 
@@ -56,13 +55,52 @@ refresh_rate = st.sidebar.slider(
 )
 
 # --------------------------------------------------
-# INSERT LIVE DATA (STREAMLIT SAFE)
+# INITIALIZE MACHINE STATE (STATEFUL + REALISTIC)
+# --------------------------------------------------
+if "machine_state" not in st.session_state:
+    st.session_state.machine_state = {}
+    for m in MACHINES:
+        st.session_state.machine_state[m] = {
+            "temperature": np.random.uniform(65, 72),
+            "vibration": np.random.uniform(2.5, 3.5),
+            "units": np.random.randint(12, 16)
+        }
+
+# --------------------------------------------------
+# RATIONAL LIVE DATA GENERATION
 # --------------------------------------------------
 def insert_live_data():
     cursor = conn.cursor()
     now = datetime.now()
 
     for m in MACHINES:
+        state = st.session_state.machine_state[m]
+
+        # ---- Temperature: slow thermal drift ----
+        temp_change = np.random.uniform(-0.3, 0.6)
+        temperature = state["temperature"] + temp_change
+        temperature = max(60, min(temperature, 92))
+
+        # ---- Vibration: wear + thermal stress ----
+        vib_change = np.random.uniform(-0.05, 0.12)
+        if temperature > 80:
+            vib_change += np.random.uniform(0.1, 0.25)
+
+        vibration = state["vibration"] + vib_change
+        vibration = max(1.5, min(vibration, 9))
+
+        # ---- Units: stable output ----
+        units = state["units"] + np.random.randint(-1, 2)
+        units = max(8, min(units, 20))
+
+        # ---- Persist state ----
+        st.session_state.machine_state[m] = {
+            "temperature": temperature,
+            "vibration": vibration,
+            "units": units
+        }
+
+        # ---- Insert into DB ----
         cursor.execute(
             """
             INSERT INTO machine_telemetry
@@ -72,9 +110,9 @@ def insert_live_data():
             (
                 now,
                 m,
-                round(np.random.uniform(60, 95), 2),
-                round(np.random.uniform(2, 9), 2),
-                np.random.randint(5, 20)
+                round(temperature, 2),
+                round(vibration, 2),
+                units
             )
         )
 
@@ -169,7 +207,7 @@ st.line_chart(df.set_index("timestamp")[["vibration"]])
 st.divider()
 
 # --------------------------------------------------
-# TODAY PEAK TEMPERATURE
+# TODAY PEAK TEMPERATURE ANALYSIS
 # --------------------------------------------------
 today = datetime.now().date()
 today_df = df[df["timestamp"].dt.date == today]
@@ -207,7 +245,7 @@ if not today_df.empty:
 st.caption(f"Last updated: {datetime.now().strftime('%H:%M:%S')}")
 
 # --------------------------------------------------
-# AUTO REFRESH (FINAL STEP)
+# AUTO REFRESH (SAFE)
 # --------------------------------------------------
 time.sleep(refresh_rate)
 st.rerun()
