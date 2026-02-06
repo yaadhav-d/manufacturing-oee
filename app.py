@@ -1,8 +1,8 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import time
 import random
+import time
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
 
@@ -27,16 +27,12 @@ machine_options = ["ALL"] + MACHINES
 
 selected_machine = st.sidebar.selectbox(
     "Select Machine",
-    machine_options,
-    key="machine_selector"
+    machine_options
 )
 
 refresh_rate = st.sidebar.slider(
     "Refresh rate (seconds)",
-    min_value=2,
-    max_value=10,
-    value=5,
-    key="refresh_rate"
+    2, 10, 5
 )
 
 # ==================================================
@@ -50,10 +46,10 @@ BASELINES = {
     "M-5": {"temp": 69, "vib": 2.8},
 }
 
-ANOMALY_PROBABILITY = 0.07  # 7% chance
+ANOMALY_PROBABILITY = 0.07  # 7%
 
 # ==================================================
-# SESSION STATE INIT
+# SESSION STATE
 # ==================================================
 if "data" not in st.session_state:
     st.session_state.data = pd.DataFrame(
@@ -61,7 +57,7 @@ if "data" not in st.session_state:
     )
 
 # ==================================================
-# DATA GENERATOR (ANOMALY BASED)
+# DATA GENERATOR
 # ==================================================
 def generate_live_data():
     rows = []
@@ -70,13 +66,11 @@ def generate_live_data():
     for m in MACHINES:
         base = BASELINES[m]
 
-        # Normal operation
         temp = np.random.normal(base["temp"], 1.2)
         vib = np.random.normal(base["vib"], 0.3)
         units = random.randint(12, 18)
         anomaly = 0
 
-        # Rare anomaly
         if random.random() < ANOMALY_PROBABILITY:
             anomaly = 1
             temp += random.uniform(15, 25)
@@ -104,7 +98,6 @@ def temperature_gauge(temp):
         title={"text": "Temperature (°C)"},
         gauge={
             "axis": {"range": [0, 100]},
-            "bar": {"color": "darkred"},
             "steps": [
                 {"range": [0, 75], "color": "#4CAF50"},
                 {"range": [75, 85], "color": "#FFC107"},
@@ -112,7 +105,6 @@ def temperature_gauge(temp):
             ],
             "threshold": {
                 "line": {"color": "black", "width": 4},
-                "thickness": 0.75,
                 "value": 85
             }
         }
@@ -127,7 +119,7 @@ def temperature_gauge(temp):
 placeholder = st.empty()
 
 while True:
-    # Generate data
+    # Generate new data
     new_data = generate_live_data()
     st.session_state.data = pd.concat(
         [st.session_state.data, new_data],
@@ -136,7 +128,7 @@ while True:
 
     df = st.session_state.data.copy()
 
-    # Apply machine filter
+    # Machine filter
     if selected_machine != "ALL":
         filtered_df = df[df["machine_id"] == selected_machine]
     else:
@@ -166,11 +158,11 @@ while True:
             )
 
         with col2:
-            st.metric("Units Produced", int(latest["units"]), key="units_metric")
-            st.metric("Machine", latest["machine_id"], key="machine_metric")
+            st.metric("Units Produced", int(latest["units"]))
+            st.metric("Machine", latest["machine_id"])
 
         with col3:
-            st.metric("Vibration (mm/s)", f"{latest['vibration']:.2f}", key="vibration_metric")
+            st.metric("Vibration (mm/s)", f"{latest['vibration']:.2f}")
             if latest["anomaly"] == 1:
                 st.error("🚨 Anomaly Detected")
             else:
@@ -190,28 +182,27 @@ while True:
         st.divider()
 
         # ==============================================
-        # DAILY PEAK TEMPERATURE ANALYSIS
+        # DAILY PEAK TEMPERATURE
         # ==============================================
         if not today_df.empty:
-            peak_row = today_df.loc[today_df["temperature"].idxmax()]
+            peak = today_df.loc[today_df["temperature"].idxmax()]
 
             st.subheader("🔥 Today’s Peak Temperature (Root Cause View)")
 
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Machine", peak_row["machine_id"], key="peak_machine")
-            c2.metric("Max Temp (°C)", peak_row["temperature"], key="peak_temp")
-            c3.metric("Units at that time", peak_row["units"], key="peak_units")
-            c4.metric("Vibration at that time", peak_row["vibration"], key="peak_vib")
+            c1.metric("Machine", peak["machine_id"])
+            c2.metric("Max Temp (°C)", peak["temperature"])
+            c3.metric("Units at that time", peak["units"])
+            c4.metric("Vibration at that time", peak["vibration"])
 
-            if peak_row["anomaly"] == 1:
-                st.error("🚨 Confirmed anomaly – investigate bearing/load/cooling")
+            if peak["anomaly"] == 1:
+                st.error("🚨 Confirmed anomaly – investigate load / bearing / cooling")
             else:
-                st.success("✅ Peak within expected operating range")
+                st.success("✅ Peak within normal operating range")
 
-            # Context window
             window_df = today_df[
-                (today_df["timestamp"] >= peak_row["timestamp"] - timedelta(minutes=10)) &
-                (today_df["timestamp"] <= peak_row["timestamp"] + timedelta(minutes=10))
+                (today_df["timestamp"] >= peak["timestamp"] - timedelta(minutes=10)) &
+                (today_df["timestamp"] <= peak["timestamp"] + timedelta(minutes=10))
             ]
 
             st.subheader("🕒 Context Around Peak Event")
