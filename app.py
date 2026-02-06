@@ -46,7 +46,7 @@ BASELINES = {
     "M-5": {"temp": 69, "vib": 2.8},
 }
 
-ANOMALY_PROBABILITY = 0.07  # 7%
+ANOMALY_PROBABILITY = 0.07
 
 # ==================================================
 # SESSION STATE
@@ -119,7 +119,6 @@ def temperature_gauge(temp):
 placeholder = st.empty()
 
 while True:
-    # Generate new data
     new_data = generate_live_data()
     st.session_state.data = pd.concat(
         [st.session_state.data, new_data],
@@ -128,22 +127,17 @@ while True:
 
     df = st.session_state.data.copy()
 
-    # Machine filter
     if selected_machine != "ALL":
         filtered_df = df[df["machine_id"] == selected_machine]
     else:
         filtered_df = df.copy()
 
-    # Today filter
     filtered_df["date"] = filtered_df["timestamp"].dt.date
     today = datetime.now().date()
     today_df = filtered_df[filtered_df["date"] == today]
 
     with placeholder.container():
 
-        # ==============================================
-        # LIVE STATUS
-        # ==============================================
         st.subheader("📊 Live Machine Status")
 
         latest = filtered_df.iloc[-1]
@@ -170,20 +164,13 @@ while True:
 
         st.divider()
 
-        # ==============================================
-        # VIBRATION TREND
-        # ==============================================
         st.subheader("📈 Vibration Trend (mm/s)")
         st.line_chart(
-            filtered_df.set_index("timestamp")[["vibration"]],
-            key="vibration_trend"
+            filtered_df.set_index("timestamp")[["vibration"]]
         )
 
         st.divider()
 
-        # ==============================================
-        # DAILY PEAK TEMPERATURE
-        # ==============================================
         if not today_df.empty:
             peak = today_df.loc[today_df["temperature"].idxmax()]
 
@@ -198,7 +185,7 @@ while True:
             if peak["anomaly"] == 1:
                 st.error("🚨 Confirmed anomaly – investigate load / bearing / cooling")
             else:
-                st.success("✅ Peak within normal operating range")
+                st.success("✅ Peak within normal range")
 
             window_df = today_df[
                 (today_df["timestamp"] >= peak["timestamp"] - timedelta(minutes=10)) &
@@ -207,8 +194,7 @@ while True:
 
             st.subheader("🕒 Context Around Peak Event")
             st.line_chart(
-                window_df.set_index("timestamp")[["temperature", "vibration"]],
-                key="anomaly_context"
+                window_df.set_index("timestamp")[["temperature", "vibration"]]
             )
 
         st.caption(f"Last updated: {datetime.now().strftime('%H:%M:%S')}")
