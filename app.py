@@ -50,7 +50,7 @@ BASELINES = {
     "M-5": {"temp": 69, "vib": 2.8},
 }
 
-ANOMALY_PROBABILITY = 0.07
+ANOMALY_PROBABILITY = 0.03  # rarer, more realistic
 
 # ==================================================
 # SESSION STATE INIT
@@ -70,32 +70,61 @@ if "data" not in st.session_state:
 if "last_generated" not in st.session_state:
     st.session_state.last_generated = None
 
+if "machine_state" not in st.session_state:
+    # holds slow-changing machine behaviour
+    st.session_state.machine_state = {
+        m: {
+            "temp": BASELINES[m]["temp"],
+            "vib": BASELINES[m]["vib"],
+            "anomaly_active": False,
+            "anomaly_steps": 0
+        }
+        for m in MACHINES
+    }
+
 # ==================================================
-# DATA GENERATOR
+# DATA GENERATOR (FACTORY-REALISTIC)
 # ==================================================
 def generate_live_data():
     rows = []
     now_utc = datetime.now(pytz.utc)
 
     for m in MACHINES:
+        state = st.session_state.machine_state[m]
         base = BASELINES[m]
 
-        temp = np.random.normal(base["temp"], 1.2)
-        vib = np.random.normal(base["vib"], 0.3)
-        units = random.randint(12, 18)
-        anomaly = 0
+        # small natural drift
+        state["temp"] += np.random.normal(0, 0.2)
+        state["vib"] += np.random.normal(0, 0.05)
 
-        if random.random() < ANOMALY_PROBABILITY:
+        # anomaly starts (gradual)
+        if not state["anomaly_active"] and random.random() < ANOMALY_PROBABILITY:
+            state["anomaly_active"] = True
+            state["anomaly_steps"] = random.randint(3, 6)
+
+        # anomaly progression
+        if state["anomaly_active"]:
+            state["temp"] += np.random.uniform(1.0, 2.0)
+            state["vib"] += np.random.uniform(0.3, 0.6)
+            state["anomaly_steps"] -= 1
             anomaly = 1
-            temp += random.uniform(15, 25)
-            vib += random.uniform(3, 5)
-            units = random.randint(5, 10)
+
+            if state["anomaly_steps"] <= 0:
+                state["anomaly_active"] = False
+        else:
+            anomaly = 0
+
+        # clamp values (real machines don’t explode)
+        state["temp"] = max(60, min(state["temp"], 95))
+        state["vib"] = max(1.5, min(state["vib"], 8))
+
+        units = random.randint(12, 18) if anomaly == 0 else random.randint(6, 10)
 
         rows.append({
             "timestamp_utc": now_utc,
             "machine_id": m,
-            "temperature": round(temp, 2),
-            "vibration": round(vib, 2),
+            "temperature": round(state["temp"], 2),
+            "vibration": round(state["vib"], 2),
             "units": units,
             "anomaly": anomaly
         })
@@ -103,7 +132,7 @@ def generate_live_data():
     return pd.DataFrame(rows)
 
 # ==================================================
-# CONTROLLED DATA GENERATION (TIME-GUARDED)
+# CONTROLLED DATA GENERATION
 # ==================================================
 now_utc = datetime.now(pytz.utc)
 
@@ -121,13 +150,13 @@ if (
 df = st.session_state.data.copy()
 
 # ==================================================
-# TIME CONVERSION (ONCE, CONSISTENTLY)
+# TIME CONVERSION
 # ==================================================
 df["timestamp_ist"] = df["timestamp_utc"].dt.tz_convert(IST)
 df["date_ist"] = df["timestamp_ist"].dt.date
 
 # ==================================================
-# APPLY MACHINE FILTER
+# APPLY MACHINE FILTER (FIXED)
 # ==================================================
 if selected_machine != "ALL":
     filtered_df = df[df["machine_id"] == selected_machine]
@@ -197,7 +226,7 @@ st.line_chart(
 st.divider()
 
 # ==================================================
-# TODAY’S PEAK TEMPERATURE (IST-CORRECT)
+# TODAY’S PEAK TEMPERATURE
 # ==================================================
 today_ist = datetime.now(IST).date()
 today_df = filtered_df[filtered_df["date_ist"] == today_ist]
@@ -231,13 +260,8 @@ if not today_df.empty:
     )
 
 # ==================================================
-# FOOTER (TRUTHFUL)
+# FOOTER
 # ==================================================
 st.caption(
     f"Last updated: {datetime.now(IST).strftime('%I:%M:%S %p IST')}"
 )
-
-# ==================================================
-# RERUN (STREAMLIT-NATIVE)
-# ==================================================
-st.rerun()
