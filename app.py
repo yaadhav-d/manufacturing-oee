@@ -50,7 +50,7 @@ BASELINES = {
     "M-5": {"temp": 69, "vib": 2.8},
 }
 
-ANOMALY_PROBABILITY = 0.03  # rare, realistic
+ANOMALY_PROBABILITY = 0.03
 
 # ==================================================
 # SESSION STATE INIT
@@ -85,7 +85,7 @@ if "machine_state" not in st.session_state:
     }
 
 # ==================================================
-# DATA GENERATOR (FACTORY REALISTIC)
+# DATA GENERATOR
 # ==================================================
 def generate_live_data():
     rows = []
@@ -94,11 +94,9 @@ def generate_live_data():
     for m in MACHINES:
         state = st.session_state.machine_state[m]
 
-        # slow natural drift
         state["temp"] += np.random.normal(0, 0.15)
         state["vib"] += np.random.normal(0, 0.04)
 
-        # start gradual anomaly
         if not state["anomaly_active"] and random.random() < ANOMALY_PROBABILITY:
             state["anomaly_active"] = True
             state["anomaly_steps"] = random.randint(4, 7)
@@ -113,7 +111,6 @@ def generate_live_data():
         else:
             anomaly = 0
 
-        # clamp to physical limits
         state["temp"] = max(60, min(state["temp"], 95))
         state["vib"] = max(1.5, min(state["vib"], 8))
 
@@ -131,7 +128,7 @@ def generate_live_data():
     return pd.DataFrame(rows)
 
 # ==================================================
-# TIME-GATED AUTO REFRESH (CORE FIX)
+# AUTO REFRESH (TIME-GATED)
 # ==================================================
 now_utc = datetime.now(UTC)
 
@@ -146,9 +143,13 @@ if now_utc >= st.session_state.next_refresh:
     st.rerun()
 
 # ==================================================
-# DATA PREP
+# DATA PREP (FIXED)
 # ==================================================
 df = st.session_state.data.copy()
+
+# 🔧 FIX: enforce datetime dtype
+df["timestamp_utc"] = pd.to_datetime(df["timestamp_utc"], utc=True)
+
 df["timestamp_ist"] = df["timestamp_utc"].dt.tz_convert(IST)
 df["date_ist"] = df["timestamp_ist"].dt.date
 
@@ -177,7 +178,7 @@ def temperature_gauge(temp):
     return fig
 
 # ==================================================
-# UI — LIVE STATUS
+# UI
 # ==================================================
 st.subheader(f"📊 Live Status — {selected_machine}")
 
@@ -196,17 +197,11 @@ with c3:
 
 st.divider()
 
-# ==================================================
-# VIBRATION TREND
-# ==================================================
 st.subheader("📈 Vibration Trend (mm/s)")
 st.line_chart(filtered_df.set_index("timestamp_ist")[["vibration"]])
 
 st.divider()
 
-# ==================================================
-# TODAY PEAK
-# ==================================================
 today_df = filtered_df[filtered_df["date_ist"] == datetime.now(IST).date()]
 
 if not today_df.empty:
