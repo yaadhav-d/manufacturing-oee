@@ -44,17 +44,17 @@ conn = get_connection()
 st.sidebar.title("🔧 Controls")
 
 MACHINES = ["M-1", "M-2", "M-3", "M-4", "M-5"]
-
 selected_machine = st.sidebar.selectbox("Select Machine", MACHINES)
 
 refresh_rate = st.sidebar.slider(
-    "Refresh rate (seconds)",
-    min_value=2,
-    max_value=10,
-    value=5
+    "Refresh rate (seconds)", 2, 10, 5
 )
 
 pause_generation = st.sidebar.checkbox("⏸ Pause data generation")
+
+st.sidebar.divider()
+st.sidebar.subheader("🧪 Demo Controls")
+inject_critical = st.sidebar.button("🚨 Add 1 Critical Sample (Reference)")
 
 # --------------------------------------------------
 # INITIALIZE MACHINE STATE (CALM BASELINE)
@@ -69,7 +69,7 @@ if "machine_state" not in st.session_state:
         }
 
 # --------------------------------------------------
-# TONED-DOWN LIVE DATA GENERATION
+# DATA GENERATION (TONED DOWN)
 # --------------------------------------------------
 def insert_live_data():
     cursor = conn.cursor()
@@ -78,36 +78,20 @@ def insert_live_data():
     for m in MACHINES:
         state = st.session_state.machine_state[m]
 
-        # -----------------------------
-        # TEMPERATURE (CALM DRIFT)
-        # -----------------------------
         temp_change = np.random.uniform(-0.4, 0.4)
-
-        # rare mild stress (5%)
         if np.random.rand() < 0.05:
             temp_change += np.random.uniform(0.6, 1.2)
 
-        temperature = state["temperature"] + temp_change
-        temperature = max(58, min(temperature, 82))
+        temperature = max(58, min(state["temperature"] + temp_change, 82))
 
-        # -----------------------------
-        # VIBRATION (STABLE)
-        # -----------------------------
         vib_change = np.random.uniform(-0.08, 0.08)
-
         if temperature > 75:
             vib_change += np.random.uniform(0.05, 0.15)
 
-        vibration = state["vibration"] + vib_change
-        vibration = max(2.0, min(vibration, 6.5))
+        vibration = max(2.0, min(state["vibration"] + vib_change, 6.5))
 
-        # -----------------------------
-        # UNITS (CONSISTENT)
-        # -----------------------------
-        units = state["units"] + np.random.randint(-1, 2)
-        units = max(10, min(units, 18))
+        units = max(10, min(state["units"] + np.random.randint(-1, 2), 18))
 
-        # persist state
         st.session_state.machine_state[m] = {
             "temperature": temperature,
             "vibration": vibration,
@@ -127,25 +111,42 @@ def insert_live_data():
     cursor.close()
 
 # --------------------------------------------------
-# FETCH DATA
+# MANUAL CRITICAL SAMPLE (REFERENCE)
 # --------------------------------------------------
-def fetch_data(machine_id):
-    query = """
-        SELECT timestamp, machine_id, temperature, vibration, units
-        FROM machine_telemetry
-        WHERE machine_id = %s
-        ORDER BY timestamp DESC
-        LIMIT 500
-    """
-    return pd.read_sql(query, conn, params=(machine_id,))
+def insert_critical_sample(machine_id="M-4"):
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO machine_telemetry
+        (timestamp, machine_id, temperature, vibration, units)
+        VALUES (%s, %s, %s, %s, %s)
+        """,
+        (datetime.now(), machine_id, 88.5, 7.8, 10)
+    )
+    conn.commit()
+    cursor.close()
 
 # --------------------------------------------------
 # MAIN EXECUTION
 # --------------------------------------------------
+if inject_critical:
+    insert_critical_sample()
+    st.sidebar.success("✅ Critical reference data added (M-4)")
+
 if not pause_generation:
     insert_live_data()
 
-df = fetch_data(selected_machine)
+df = pd.read_sql(
+    """
+    SELECT timestamp, machine_id, temperature, vibration, units
+    FROM machine_telemetry
+    WHERE machine_id = %s
+    ORDER BY timestamp DESC
+    LIMIT 500
+    """,
+    conn,
+    params=(selected_machine,)
+)
 
 if df.empty:
     st.warning("Waiting for live data...")
@@ -157,12 +158,10 @@ df = df.sort_values("timestamp")
 latest = df.iloc[-1]
 
 # --------------------------------------------------
-# KPI LOGIC (REQUIREMENT-COMPLIANT)
+# KPI LOGIC
 # --------------------------------------------------
-TEMP_WARNING = 80
-TEMP_CRITICAL = 85
-VIB_WARNING = 6.5
-VIB_CRITICAL = 7.5
+TEMP_WARNING, TEMP_CRITICAL = 80, 85
+VIB_WARNING, VIB_CRITICAL = 6.5, 7.5
 
 if latest["temperature"] >= TEMP_CRITICAL or latest["vibration"] >= VIB_CRITICAL:
     machine_status = "CRITICAL"
@@ -192,17 +191,12 @@ st.subheader("📌 Primary Live KPIs")
 
 k1, k2, k3 = st.columns(3)
 
-with k1:
-    st.metric("Estimated Downtime (mins)", estimated_downtime_minutes)
-
-with k2:
-    st.metric(
-        "LIVE Vibration / Temperature",
-        f"{latest['vibration']:.2f} mm/s | {latest['temperature']:.1f} °C"
-    )
-
-with k3:
-    st.metric("Estimated Units / Hour", estimated_units_per_hour)
+k1.metric("Estimated Downtime (mins)", estimated_downtime_minutes)
+k2.metric(
+    "LIVE Vibration / Temperature",
+    f"{latest['vibration']:.2f} mm/s | {latest['temperature']:.1f} °C"
+)
+k3.metric("Estimated Units / Hour", estimated_units_per_hour)
 
 st.divider()
 
@@ -228,21 +222,16 @@ def temperature_gauge(temp):
     return fig
 
 # --------------------------------------------------
-# LIVE MACHINE STATUS
+# LIVE STATUS
 # --------------------------------------------------
 st.subheader("📊 Live Machine Status")
 
 c1, c2, c3 = st.columns([2, 1, 1])
 
-with c1:
-    st.plotly_chart(temperature_gauge(latest["temperature"]), use_container_width=True)
-
-with c2:
-    st.metric("Machine", latest["machine_id"])
-    st.metric("Status", machine_status)
-
-with c3:
-    st.metric("Vibration (mm/s)", f"{latest['vibration']:.2f}")
+c1.plotly_chart(temperature_gauge(latest["temperature"]), use_container_width=True)
+c2.metric("Machine", latest["machine_id"])
+c2.metric("Status", machine_status)
+c3.metric("Vibration (mm/s)", f"{latest['vibration']:.2f}")
 
 st.divider()
 
@@ -257,12 +246,10 @@ st.divider()
 # --------------------------------------------------
 # DAILY PEAK TEMPERATURE
 # --------------------------------------------------
-today = datetime.now().date()
-today_df = df[df["timestamp"].dt.date == today]
+today_df = df[df["timestamp"].dt.date == datetime.now().date()]
 
 if not today_df.empty:
     peak = today_df.loc[today_df["temperature"].idxmax()]
-
     st.subheader("🔥 Today’s Peak Temperature")
 
     a, b, c = st.columns(3)
@@ -270,14 +257,26 @@ if not today_df.empty:
     b.metric("Units at Peak", int(peak["units"]))
     c.metric("Vibration at Peak", peak["vibration"])
 
-    peak_time = peak["timestamp"]
     window_df = today_df[
-        (today_df["timestamp"] >= peak_time - timedelta(minutes=10)) &
-        (today_df["timestamp"] <= peak_time + timedelta(minutes=10))
+        (today_df["timestamp"] >= peak["timestamp"] - timedelta(minutes=10)) &
+        (today_df["timestamp"] <= peak["timestamp"] + timedelta(minutes=10))
     ]
 
     st.subheader("🕒 10-Minute Window Around Peak")
     st.line_chart(window_df.set_index("timestamp")[["temperature", "vibration"]])
+
+# --------------------------------------------------
+# CRITICAL ALERT NOTES
+# --------------------------------------------------
+st.divider()
+st.caption(
+    "🔴 **Critical Alert Notes**  \n"
+    "• Critical Alert is triggered when **Temperature ≥ 85 °C** or "
+    "**Vibration ≥ 7.5 mm/s**.  \n"
+    "• These indicate unsafe operating conditions requiring immediate attention.  \n"
+    "• **Estimated Downtime** represents sustained time spent in critical state.  \n"
+    "• Alerts are sensor-based and updated in real time."
+)
 
 st.caption(f"Last updated: {datetime.now().strftime('%H:%M:%S')}")
 
