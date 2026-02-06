@@ -56,7 +56,7 @@ if "data" not in st.session_state:
     )
 
 # ==================================================
-# DATA GENERATOR (ONE CYCLE)
+# DATA GENERATOR
 # ==================================================
 def generate_live_data():
     rows = []
@@ -88,13 +88,20 @@ def generate_live_data():
     return pd.DataFrame(rows)
 
 # ==================================================
-# APPEND NEW DATA (ON EACH RUN)
+# ✅ FIXED: CONTROLLED DATA GENERATION (ONLY CHANGE)
 # ==================================================
-new_data = generate_live_data()
-st.session_state.data = pd.concat(
-    [st.session_state.data, new_data],
-    ignore_index=True
-)
+now = datetime.now()
+
+if (
+    "last_generated" not in st.session_state
+    or (now - st.session_state.last_generated).seconds >= refresh_rate
+):
+    new_data = generate_live_data()
+    st.session_state.data = pd.concat(
+        [st.session_state.data, new_data],
+        ignore_index=True
+    )
+    st.session_state.last_generated = now
 
 df = st.session_state.data.copy()
 
@@ -200,9 +207,5 @@ if not today_df.empty:
 
 st.caption(f"Last updated: {datetime.now().strftime('%H:%M:%S')}")
 
-# ==================================================
-# CONTROLLED REFRESH (FINAL LINE)
-# ==================================================
 time.sleep(refresh_rate)
 st.rerun()
-
