@@ -17,6 +17,12 @@ st.set_page_config(
 st.title("🏭 Manufacturing OEE – Live Monitoring Dashboard")
 
 # ==================================================
+# AUTO REFRESH (OFFICIAL STREAMLIT WAY)
+# ==================================================
+refresh_ms = 5000  # default, overridden by slider below
+st.autorefresh(interval=refresh_ms, key="auto_refresh")
+
+# ==================================================
 # TIMEZONE
 # ==================================================
 IST = pytz.timezone("Asia/Kolkata")
@@ -27,17 +33,20 @@ IST = pytz.timezone("Asia/Kolkata")
 st.sidebar.title("🔧 Controls")
 
 MACHINES = ["M-1", "M-2", "M-3", "M-4", "M-5"]
-machine_options = ["ALL"] + MACHINES
 
 selected_machine = st.sidebar.selectbox(
     "Select Machine",
-    machine_options
+    MACHINES
 )
 
 refresh_rate = st.sidebar.slider(
     "Refresh rate (seconds)",
     2, 10, 5
 )
+
+# update refresh interval dynamically
+refresh_ms = refresh_rate * 1000
+st.autorefresh(interval=refresh_ms, key="auto_refresh_dynamic")
 
 # ==================================================
 # REALISTIC BASELINES
@@ -82,7 +91,7 @@ if "machine_state" not in st.session_state:
     }
 
 # ==================================================
-# DATA GENERATOR (FACTORY-REALISTIC)
+# DATA GENERATOR (FACTORY REALISTIC)
 # ==================================================
 def generate_live_data():
     rows = []
@@ -91,18 +100,18 @@ def generate_live_data():
     for m in MACHINES:
         state = st.session_state.machine_state[m]
 
-        # small natural drift
-        state["temp"] += np.random.normal(0, 0.2)
-        state["vib"] += np.random.normal(0, 0.05)
+        # slow natural drift
+        state["temp"] += np.random.normal(0, 0.15)
+        state["vib"] += np.random.normal(0, 0.04)
 
-        # start anomaly (gradual)
+        # start anomaly (gradual ramp)
         if not state["anomaly_active"] and random.random() < ANOMALY_PROBABILITY:
             state["anomaly_active"] = True
-            state["anomaly_steps"] = random.randint(3, 6)
+            state["anomaly_steps"] = random.randint(4, 7)
 
         if state["anomaly_active"]:
-            state["temp"] += np.random.uniform(1.0, 2.0)
-            state["vib"] += np.random.uniform(0.3, 0.6)
+            state["temp"] += np.random.uniform(0.8, 1.5)
+            state["vib"] += np.random.uniform(0.2, 0.4)
             state["anomaly_steps"] -= 1
             anomaly = 1
 
@@ -111,7 +120,7 @@ def generate_live_data():
         else:
             anomaly = 0
 
-        # clamp to realistic limits
+        # clamp to physical limits
         state["temp"] = max(60, min(state["temp"], 95))
         state["vib"] = max(1.5, min(state["vib"], 8))
 
@@ -129,7 +138,7 @@ def generate_live_data():
     return pd.DataFrame(rows)
 
 # ==================================================
-# CONTROLLED DATA GENERATION (TIME-GUARDED)
+# CONTROLLED DATA GENERATION
 # ==================================================
 now_utc = datetime.now(pytz.utc)
 
@@ -153,13 +162,9 @@ df["timestamp_ist"] = df["timestamp_utc"].dt.tz_convert(IST)
 df["date_ist"] = df["timestamp_ist"].dt.date
 
 # ==================================================
-# APPLY MACHINE FILTER (WORKS)
+# APPLY MACHINE FILTER (NO ALL)
 # ==================================================
-if selected_machine != "ALL":
-    filtered_df = df[df["machine_id"] == selected_machine]
-else:
-    filtered_df = df.copy()
-
+filtered_df = df[df["machine_id"] == selected_machine]
 latest = filtered_df.iloc[-1]
 
 # ==================================================
@@ -189,7 +194,7 @@ def temperature_gauge(temp):
 # ==================================================
 # UI — LIVE STATUS
 # ==================================================
-st.subheader("📊 Live Machine Status")
+st.subheader(f"📊 Live Status — {selected_machine}")
 
 col1, col2, col3 = st.columns([2, 1, 1])
 
@@ -262,13 +267,3 @@ if not today_df.empty:
 st.caption(
     f"Last updated: {datetime.now(IST).strftime('%I:%M:%S %p IST')}"
 )
-
-# ==================================================
-# AUTO-REFRESH (SAFE, DOES NOT BREAK NAVBAR)
-# ==================================================
-now_utc = datetime.now(pytz.utc)
-
-if (now_utc - st.session_state.last_generated).seconds < refresh_rate:
-    st.stop()
-
-st.rerun()
