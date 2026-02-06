@@ -98,7 +98,7 @@ def generate_live_data():
             if state["steps"] <= 0:
                 state["anomaly"] = False
 
-        # clamp values
+        # clamp
         state["temp"] = max(60, min(state["temp"], 95))
         state["vib"] = max(1.5, min(state["vib"], 9))
 
@@ -141,7 +141,7 @@ def temperature_gauge(temp):
     return fig
 
 # --------------------------------------------------
-# MAIN LOOP (UNCHANGED STRUCTURE)
+# MAIN LOOP
 # --------------------------------------------------
 placeholder = st.empty()
 
@@ -153,7 +153,6 @@ while True:
     )
 
     df = st.session_state.data.copy()
-
     filtered_df = df[df["machine_id"] == selected_machine]
 
     filtered_df["date"] = pd.to_datetime(filtered_df["timestamp"]).dt.date
@@ -171,7 +170,8 @@ while True:
         with col1:
             st.plotly_chart(
                 temperature_gauge(latest["temperature"]),
-                use_container_width=True
+                use_container_width=True,
+                key="temp_gauge"
             )
 
         with col2:
