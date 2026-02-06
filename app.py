@@ -2,20 +2,24 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import random
-import time
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
+from streamlit_autorefresh import st_autorefresh
 
 # ==================================================
 # PAGE CONFIG
 # ==================================================
 st.set_page_config(
     page_title="Manufacturing OEE – Live Dashboard",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
 st.title("🏭 Manufacturing OEE – Live Monitoring Dashboard")
+
+# ==================================================
+# AUTO REFRESH (KEY FIX)
+# ==================================================
+st_autorefresh(interval=5 * 1000, key="auto_refresh")
 
 # ==================================================
 # SIDEBAR CONTROLS
@@ -28,11 +32,6 @@ machine_options = ["ALL"] + MACHINES
 selected_machine = st.sidebar.selectbox(
     "Select Machine",
     machine_options
-)
-
-refresh_rate = st.sidebar.slider(
-    "Refresh rate (seconds)",
-    2, 10, 5
 )
 
 # ==================================================
@@ -57,7 +56,7 @@ if "data" not in st.session_state:
     )
 
 # ==================================================
-# DATA GENERATOR
+# DATA GENERATOR (ONE CYCLE PER RUN)
 # ==================================================
 def generate_live_data():
     rows = []
@@ -89,6 +88,31 @@ def generate_live_data():
     return pd.DataFrame(rows)
 
 # ==================================================
+# APPEND NEW DATA
+# ==================================================
+new_data = generate_live_data()
+st.session_state.data = pd.concat(
+    [st.session_state.data, new_data],
+    ignore_index=True
+)
+
+df = st.session_state.data.copy()
+
+# ==================================================
+# APPLY MACHINE FILTER
+# ==================================================
+if selected_machine != "ALL":
+    filtered_df = df[df["machine_id"] == selected_machine]
+else:
+    filtered_df = df.copy()
+
+filtered_df["date"] = filtered_df["timestamp"].dt.date
+today = datetime.now().date()
+today_df = filtered_df[filtered_df["date"] == today]
+
+latest = filtered_df.iloc[-1]
+
+# ==================================================
 # TEMPERATURE GAUGE
 # ==================================================
 def temperature_gauge(temp):
@@ -109,94 +133,69 @@ def temperature_gauge(temp):
             }
         }
     ))
-
     fig.update_layout(height=300, margin=dict(t=40, b=0))
     return fig
 
 # ==================================================
-# MAIN LOOP
+# UI RENDER
 # ==================================================
-placeholder = st.empty()
+st.subheader("📊 Live Machine Status")
 
-while True:
-    new_data = generate_live_data()
-    st.session_state.data = pd.concat(
-        [st.session_state.data, new_data],
-        ignore_index=True
+col1, col2, col3 = st.columns([2, 1, 1])
+
+with col1:
+    st.plotly_chart(
+        temperature_gauge(latest["temperature"]),
+        use_container_width=True
     )
 
-    df = st.session_state.data.copy()
+with col2:
+    st.metric("Units Produced", int(latest["units"]))
+    st.metric("Machine", latest["machine_id"])
 
-    if selected_machine != "ALL":
-        filtered_df = df[df["machine_id"] == selected_machine]
+with col3:
+    st.metric("Vibration (mm/s)", f"{latest['vibration']:.2f}")
+    if latest["anomaly"] == 1:
+        st.error("🚨 Anomaly Detected")
     else:
-        filtered_df = df.copy()
+        st.success("✅ Normal")
 
-    filtered_df["date"] = filtered_df["timestamp"].dt.date
-    today = datetime.now().date()
-    today_df = filtered_df[filtered_df["date"] == today]
+st.divider()
 
-    with placeholder.container():
+st.subheader("📈 Vibration Trend (mm/s)")
+st.line_chart(
+    filtered_df.set_index("timestamp")[["vibration"]]
+)
 
-        st.subheader("📊 Live Machine Status")
+st.divider()
 
-        latest = filtered_df.iloc[-1]
+# ==================================================
+# PEAK TEMPERATURE ANALYSIS
+# ==================================================
+if not today_df.empty:
+    peak = today_df.loc[today_df["temperature"].idxmax()]
 
-        col1, col2, col3 = st.columns([2, 1, 1])
+    st.subheader("🔥 Today’s Peak Temperature (Root Cause View)")
 
-        with col1:
-            st.plotly_chart(
-                temperature_gauge(latest["temperature"]),
-                use_container_width=True,
-                key="temp_gauge"
-            )
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Machine", peak["machine_id"])
+    c2.metric("Max Temp (°C)", peak["temperature"])
+    c3.metric("Units at that time", peak["units"])
+    c4.metric("Vibration at that time", peak["vibration"])
 
-        with col2:
-            st.metric("Units Produced", int(latest["units"]))
-            st.metric("Machine", latest["machine_id"])
+    if peak["anomaly"] == 1:
+        st.error("🚨 Confirmed anomaly – investigate load / bearing / cooling")
+    else:
+        st.success("✅ Peak within normal range")
 
-        with col3:
-            st.metric("Vibration (mm/s)", f"{latest['vibration']:.2f}")
-            if latest["anomaly"] == 1:
-                st.error("🚨 Anomaly Detected")
-            else:
-                st.success("✅ Normal")
+    window_df = today_df[
+        (today_df["timestamp"] >= peak["timestamp"] - timedelta(minutes=10)) &
+        (today_df["timestamp"] <= peak["timestamp"] + timedelta(minutes=10))
+    ]
 
-        st.divider()
+    st.subheader("🕒 Context Around Peak Event")
+    st.line_chart(
+        window_df.set_index("timestamp")[["temperature", "vibration"]]
+    )
 
-        st.subheader("📈 Vibration Trend (mm/s)")
-        st.line_chart(
-            filtered_df.set_index("timestamp")[["vibration"]]
-        )
-
-        st.divider()
-
-        if not today_df.empty:
-            peak = today_df.loc[today_df["temperature"].idxmax()]
-
-            st.subheader("🔥 Today’s Peak Temperature (Root Cause View)")
-
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Machine", peak["machine_id"])
-            c2.metric("Max Temp (°C)", peak["temperature"])
-            c3.metric("Units at that time", peak["units"])
-            c4.metric("Vibration at that time", peak["vibration"])
-
-            if peak["anomaly"] == 1:
-                st.error("🚨 Confirmed anomaly – investigate load / bearing / cooling")
-            else:
-                st.success("✅ Peak within normal range")
-
-            window_df = today_df[
-                (today_df["timestamp"] >= peak["timestamp"] - timedelta(minutes=10)) &
-                (today_df["timestamp"] <= peak["timestamp"] + timedelta(minutes=10))
-            ]
-
-            st.subheader("🕒 Context Around Peak Event")
-            st.line_chart(
-                window_df.set_index("timestamp")[["temperature", "vibration"]]
-            )
-
-        st.caption(f"Last updated: {datetime.now().strftime('%H:%M:%S')}")
-
-    time.sleep(refresh_rate)
+st.caption(f"Last updated: {datetime.now().strftime('%H:%M:%S')}")
