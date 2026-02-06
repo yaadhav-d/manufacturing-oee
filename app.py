@@ -1,28 +1,24 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 import plotly.graph_objects as go
-import pytz
 
-# ==================================================
+# --------------------------------------------------
 # PAGE CONFIG
-# ==================================================
+# --------------------------------------------------
 st.set_page_config(
     page_title="Manufacturing OEE – Live Dashboard",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 st.title("🏭 Manufacturing OEE – Live Monitoring Dashboard")
 
-# ==================================================
-# TIMEZONE
-# ==================================================
-IST = pytz.timezone("Asia/Kolkata")
-
-# ==================================================
+# --------------------------------------------------
 # SIDEBAR
-# ==================================================
+# --------------------------------------------------
 st.sidebar.title("🔧 Controls")
 
 MACHINES = ["M-1", "M-2", "M-3", "M-4", "M-5"]
@@ -34,51 +30,30 @@ selected_machine = st.sidebar.selectbox(
 
 refresh_rate = st.sidebar.slider(
     "Refresh rate (seconds)",
-    2, 10, 5
+    min_value=2,
+    max_value=10,
+    value=5
 )
 
-# ==================================================
+# --------------------------------------------------
 # SESSION STATE INIT
-# ==================================================
+# --------------------------------------------------
 if "data" not in st.session_state:
     st.session_state.data = pd.DataFrame(
         columns=["timestamp", "machine_id", "temperature", "vibration", "units"]
     )
 
-if "machine_state" not in st.session_state:
-    st.session_state.machine_state = {
-        m: {
-            "temp": np.random.uniform(65, 75),
-            "vib": np.random.uniform(2.5, 4.0)
-        }
-        for m in MACHINES
-    }
-
-if "last_update" not in st.session_state:
-    st.session_state.last_update = datetime.now()
-
-# ==================================================
-# DATA GENERATION (REALISTIC, STABLE)
-# ==================================================
+# --------------------------------------------------
+# DATA GENERATOR (SIMULATED LIVE DATA)
+# --------------------------------------------------
 def generate_live_data():
-    now = datetime.now()
     rows = []
+    now = datetime.now()
 
     for m in MACHINES:
-        state = st.session_state.machine_state[m]
-
-        # smooth industrial drift
-        temp = state["temp"] + np.random.normal(0, 0.3)
-        vib = state["vib"] + np.random.normal(0, 0.1)
-
-        # clamp physical limits
-        temp = max(60, min(temp, 90))
-        vib = max(1.5, min(vib, 7))
-
-        state["temp"] = temp
-        state["vib"] = vib
-
-        units = np.random.randint(12, 18)
+        temp = np.random.uniform(60, 95)
+        vib = np.random.uniform(2, 9)
+        units = np.random.randint(5, 20)
 
         rows.append({
             "timestamp": now,
@@ -90,29 +65,9 @@ def generate_live_data():
 
     return pd.DataFrame(rows)
 
-# ==================================================
-# AUTO UPDATE (SAFE, STREAMLIT-NATIVE)
-# ==================================================
-if (datetime.now() - st.session_state.last_update).seconds >= refresh_rate:
-    new_data = generate_live_data()
-    st.session_state.data = pd.concat(
-        [st.session_state.data, new_data],
-        ignore_index=True
-    )
-    st.session_state.last_update = datetime.now()
-
-df = st.session_state.data.copy()
-
-if df.empty:
-    st.info("Waiting for live data…")
-    st.stop()
-
-filtered_df = df[df["machine_id"] == selected_machine]
-latest = filtered_df.iloc[-1]
-
-# ==================================================
+# --------------------------------------------------
 # TEMPERATURE GAUGE
-# ==================================================
+# --------------------------------------------------
 def temperature_gauge(temp):
     fig = go.Figure(go.Indicator(
         mode="gauge+number",
@@ -120,6 +75,7 @@ def temperature_gauge(temp):
         title={"text": "Temperature (°C)"},
         gauge={
             "axis": {"range": [0, 100]},
+            "bar": {"color": "darkred"},
             "steps": [
                 {"range": [0, 70], "color": "#4CAF50"},
                 {"range": [70, 85], "color": "#FFC107"},
@@ -127,69 +83,120 @@ def temperature_gauge(temp):
             ],
             "threshold": {
                 "line": {"color": "black", "width": 4},
+                "thickness": 0.75,
                 "value": 85
             }
         }
     ))
-    fig.update_layout(height=300)
+
+    fig.update_layout(height=300, margin=dict(t=40, b=0))
     return fig
 
-# ==================================================
-# LIVE STATUS
-# ==================================================
-st.subheader(f"📊 Live Machine Status – {selected_machine}")
+# --------------------------------------------------
+# MAIN LOOP
+# --------------------------------------------------
+placeholder = st.empty()
 
-c1, c2, c3 = st.columns([2, 1, 1])
-
-with c1:
-    st.plotly_chart(
-        temperature_gauge(latest["temperature"]),
-        use_container_width=True
+while True:
+    # Generate and append new data
+    new_data = generate_live_data()
+    st.session_state.data = pd.concat(
+        [st.session_state.data, new_data],
+        ignore_index=True
     )
 
-with c2:
-    st.metric("Units Produced", int(latest["units"]))
-    st.metric("Temperature", f"{latest['temperature']} °C")
+    df = st.session_state.data.copy()
 
-with c3:
-    st.metric("Vibration (mm/s)", f"{latest['vibration']:.2f}")
+    # --------------------------------------------------
+    # APPLY MACHINE FILTER (NO ALL OPTION)
+    # --------------------------------------------------
+    filtered_df = df[df["machine_id"] == selected_machine]
 
-st.divider()
+    # --------------------------------------------------
+    # TODAY FILTER
+    # --------------------------------------------------
+    filtered_df["date"] = filtered_df["timestamp"].dt.date
+    today = datetime.now().date()
+    today_df = filtered_df[filtered_df["date"] == today]
 
-# ==================================================
-# VIBRATION TREND
-# ==================================================
-st.subheader("📈 Vibration Trend")
-st.line_chart(
-    filtered_df.set_index("timestamp")[["vibration"]]
-)
+    with placeholder.container():
 
-st.divider()
+        # --------------------------------------------------
+        # LIVE STATUS
+        # --------------------------------------------------
+        st.subheader("📊 Live Machine Status")
 
-# ==================================================
-# TODAY PEAK ANALYSIS
-# ==================================================
-df["date"] = df["timestamp"].dt.date
-today = datetime.now().date()
-today_df = filtered_df[filtered_df["date"] == today]
+        latest = filtered_df.iloc[-1]
 
-if not today_df.empty:
-    peak = today_df.loc[today_df["temperature"].idxmax()]
+        col1, col2, col3 = st.columns([2, 1, 1])
 
-    st.subheader("🔥 Today’s Peak Temperature Analysis")
+        with col1:
+            st.plotly_chart(
+                temperature_gauge(latest["temperature"]),
+                use_container_width=True
+            )
 
-    a, b, c, d = st.columns(4)
-    a.metric("Max Temp (°C)", peak["temperature"])
-    b.metric("Units at that time", int(peak["units"]))
-    c.metric("Vibration", peak["vibration"])
-    d.metric(
-        "Incident Time",
-        peak["timestamp"].astimezone(IST).strftime("%I:%M:%S %p IST")
-    )
+        with col2:
+            st.metric("Units Produced", int(latest["units"]))
+            st.metric("Machine", latest["machine_id"])
 
-# ==================================================
-# FOOTER
-# ==================================================
-st.caption(
-    f"Last updated: {datetime.now(IST).strftime('%I:%M:%S %p IST')}"
-)
+        with col3:
+            st.metric("Vibration (mm/s)", f"{latest['vibration']:.2f}")
+            if latest["vibration"] > 7:
+                st.warning("⚠️ High vibration")
+
+        st.divider()
+
+        # --------------------------------------------------
+        # VIBRATION TREND
+        # --------------------------------------------------
+        st.subheader("📈 Vibration Trend (mm/s)")
+
+        st.line_chart(
+            filtered_df.set_index("timestamp")[["vibration"]]
+        )
+
+        st.divider()
+
+        # --------------------------------------------------
+        # DAILY PEAK TEMPERATURE ANALYSIS
+        # --------------------------------------------------
+        if not today_df.empty:
+            peak_row = today_df.loc[today_df["temperature"].idxmax()]
+
+            peak_time = peak_row["timestamp"]
+            peak_temp = peak_row["temperature"]
+            peak_units = peak_row["units"]
+            peak_vibration = peak_row["vibration"]
+            peak_machine = peak_row["machine_id"]
+
+            st.subheader("🔥 Today’s Peak Temperature Analysis")
+
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Machine", peak_machine)
+            c2.metric("Max Temp (°C)", f"{peak_temp}")
+            c3.metric("Units at that time", int(peak_units))
+            c4.metric("Vibration at that time", f"{peak_vibration}")
+
+            if peak_temp > 85:
+                st.error("🚨 High temperature event – possible overload or friction issue")
+            else:
+                st.success("✅ Temperature within safe range")
+
+            # --------------------------------------------------
+            # ROOT CAUSE CONTEXT WINDOW
+            # --------------------------------------------------
+            st.subheader("🕒 10-Minute Window Around Temperature Spike")
+
+            window_df = today_df[
+                (today_df["timestamp"] >= peak_time - timedelta(minutes=10)) &
+                (today_df["timestamp"] <= peak_time + timedelta(minutes=10))
+            ]
+
+            st.line_chart(
+                window_df.set_index("timestamp")[["temperature", "vibration"]]
+            )
+
+        st.caption(f"Last updated: {datetime.now().strftime('%H:%M:%S')}")
+
+    time.sleep(refresh_rate)
