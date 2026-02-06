@@ -4,8 +4,6 @@ import numpy as np
 import time
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
-import pytz
-import random
 
 # --------------------------------------------------
 # PAGE CONFIG
@@ -19,20 +17,16 @@ st.set_page_config(
 st.title("🏭 Manufacturing OEE – Live Monitoring Dashboard")
 
 # --------------------------------------------------
-# TIMEZONE
-# --------------------------------------------------
-IST = pytz.timezone("Asia/Kolkata")
-
-# --------------------------------------------------
 # SIDEBAR
 # --------------------------------------------------
 st.sidebar.title("🔧 Controls")
 
 MACHINES = ["M-1", "M-2", "M-3", "M-4", "M-5"]
+machine_options = ["ALL"] + MACHINES
 
 selected_machine = st.sidebar.selectbox(
     "Select Machine",
-    MACHINES
+    machine_options
 )
 
 refresh_rate = st.sidebar.slider(
@@ -43,17 +37,6 @@ refresh_rate = st.sidebar.slider(
 )
 
 # --------------------------------------------------
-# BASELINES (REALISTIC)
-# --------------------------------------------------
-BASELINES = {
-    "M-1": {"temp": 68, "vib": 2.5},
-    "M-2": {"temp": 70, "vib": 3.0},
-    "M-3": {"temp": 66, "vib": 2.2},
-    "M-4": {"temp": 72, "vib": 3.5},
-    "M-5": {"temp": 69, "vib": 2.8},
-}
-
-# --------------------------------------------------
 # SESSION STATE INIT
 # --------------------------------------------------
 if "data" not in st.session_state:
@@ -61,54 +44,23 @@ if "data" not in st.session_state:
         columns=["timestamp", "machine_id", "temperature", "vibration", "units"]
     )
 
-if "machine_state" not in st.session_state:
-    st.session_state.machine_state = {
-        m: {
-            "temp": BASELINES[m]["temp"],
-            "vib": BASELINES[m]["vib"],
-            "anomaly": False,
-            "steps": 0
-        }
-        for m in MACHINES
-    }
-
 # --------------------------------------------------
-# DATA GENERATOR (REALISTIC)
+# DATA GENERATOR (SIMULATED LIVE DATA)
 # --------------------------------------------------
 def generate_live_data():
     rows = []
-    now = datetime.now(IST)
+    now = datetime.now()
 
     for m in MACHINES:
-        state = st.session_state.machine_state[m]
-
-        # natural drift
-        state["temp"] += np.random.normal(0, 0.2)
-        state["vib"] += np.random.normal(0, 0.05)
-
-        # rare gradual anomaly
-        if not state["anomaly"] and random.random() < 0.03:
-            state["anomaly"] = True
-            state["steps"] = random.randint(3, 6)
-
-        if state["anomaly"]:
-            state["temp"] += np.random.uniform(0.8, 1.5)
-            state["vib"] += np.random.uniform(0.3, 0.6)
-            state["steps"] -= 1
-            if state["steps"] <= 0:
-                state["anomaly"] = False
-
-        # clamp
-        state["temp"] = max(60, min(state["temp"], 95))
-        state["vib"] = max(1.5, min(state["vib"], 9))
-
-        units = random.randint(12, 18) if not state["anomaly"] else random.randint(6, 10)
+        temp = np.random.uniform(60, 95)
+        vib = np.random.uniform(2, 9)
+        units = np.random.randint(5, 20)
 
         rows.append({
             "timestamp": now,
             "machine_id": m,
-            "temperature": round(state["temp"], 2),
-            "vibration": round(state["vib"], 2),
+            "temperature": round(temp, 2),
+            "vibration": round(vib, 2),
             "units": units
         })
 
@@ -137,6 +89,7 @@ def temperature_gauge(temp):
             }
         }
     ))
+
     fig.update_layout(height=300, margin=dict(t=40, b=0))
     return fig
 
@@ -146,6 +99,7 @@ def temperature_gauge(temp):
 placeholder = st.empty()
 
 while True:
+    # Generate and append new data
     new_data = generate_live_data()
     st.session_state.data = pd.concat(
         [st.session_state.data, new_data],
@@ -153,14 +107,27 @@ while True:
     )
 
     df = st.session_state.data.copy()
-    filtered_df = df[df["machine_id"] == selected_machine]
 
-    filtered_df["date"] = pd.to_datetime(filtered_df["timestamp"]).dt.date
-    today = datetime.now(IST).date()
+    # --------------------------------------------------
+    # APPLY MACHINE FILTER
+    # --------------------------------------------------
+    if selected_machine != "ALL":
+        filtered_df = df[df["machine_id"] == selected_machine]
+    else:
+        filtered_df = df.copy()
+
+    # --------------------------------------------------
+    # TODAY FILTER
+    # --------------------------------------------------
+    filtered_df["date"] = filtered_df["timestamp"].dt.date
+    today = datetime.now().date()
     today_df = filtered_df[filtered_df["date"] == today]
 
     with placeholder.container():
 
+        # --------------------------------------------------
+        # LIVE STATUS
+        # --------------------------------------------------
         st.subheader("📊 Live Machine Status")
 
         latest = filtered_df.iloc[-1]
@@ -170,8 +137,7 @@ while True:
         with col1:
             st.plotly_chart(
                 temperature_gauge(latest["temperature"]),
-                use_container_width=True,
-                key="temp_gauge"
+                use_container_width=True
             )
 
         with col2:
@@ -185,42 +151,56 @@ while True:
 
         st.divider()
 
+        # --------------------------------------------------
+        # VIBRATION TREND
+        # --------------------------------------------------
         st.subheader("📈 Vibration Trend (mm/s)")
+
         st.line_chart(
             filtered_df.set_index("timestamp")[["vibration"]]
         )
 
         st.divider()
 
+        # --------------------------------------------------
+        # DAILY PEAK TEMPERATURE ANALYSIS
+        # --------------------------------------------------
         if not today_df.empty:
             peak_row = today_df.loc[today_df["temperature"].idxmax()]
+
+            peak_time = peak_row["timestamp"]
+            peak_temp = peak_row["temperature"]
+            peak_units = peak_row["units"]
+            peak_vibration = peak_row["vibration"]
+            peak_machine = peak_row["machine_id"]
 
             st.subheader("🔥 Today’s Peak Temperature Analysis")
 
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Machine", peak_row["machine_id"])
-            c2.metric("Max Temp (°C)", peak_row["temperature"])
-            c3.metric("Units at that time", int(peak_row["units"]))
-            c4.metric("Vibration at that time", peak_row["vibration"])
+            c1.metric("Machine", peak_machine)
+            c2.metric("Max Temp (°C)", f"{peak_temp}")
+            c3.metric("Units at that time", int(peak_units))
+            c4.metric("Vibration at that time", f"{peak_vibration}")
 
-            if peak_row["temperature"] > 85:
+            if peak_temp > 85:
                 st.error("🚨 High temperature event – possible overload or friction issue")
             else:
                 st.success("✅ Temperature within safe range")
 
+            # --------------------------------------------------
+            # ROOT CAUSE CONTEXT WINDOW
+            # --------------------------------------------------
             st.subheader("🕒 10-Minute Window Around Temperature Spike")
 
             window_df = today_df[
-                (today_df["timestamp"] >= peak_row["timestamp"] - timedelta(minutes=10)) &
-                (today_df["timestamp"] <= peak_row["timestamp"] + timedelta(minutes=10))
+                (today_df["timestamp"] >= peak_time - timedelta(minutes=10)) &
+                (today_df["timestamp"] <= peak_time + timedelta(minutes=10))
             ]
 
             st.line_chart(
                 window_df.set_index("timestamp")[["temperature", "vibration"]]
             )
 
-        st.caption(
-            f"Last updated: {datetime.now(IST).strftime('%I:%M:%S %p IST')}"
-        )
+        st.caption(f"Last updated: {datetime.now().strftime('%H:%M:%S')}")
 
     time.sleep(refresh_rate)
